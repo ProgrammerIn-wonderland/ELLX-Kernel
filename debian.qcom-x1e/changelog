@@ -1,4 +1,4 @@
-linux-qcom-x1e (7.0.0-9.9) questing; urgency=medium
+linux-qcom-x1e (7.0.0-12.12) questing; urgency=medium
 
   * Rebase qcom-x1e onto 7.0
 
