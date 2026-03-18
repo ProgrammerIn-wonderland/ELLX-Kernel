@@ -1,3 +1,10 @@
+linux-qcom-x1e (7.0.0-13.13) questing; urgency=medium
+
+  * Add x1p42100-hp-elitebook-6-g1q
+  * Add x1p42100-asus-vivobook-s15
+
+ -- Tobias Heider <tobias.heider@canonical.com>  Wed, 18 Mar 2026 12:03:32 +0100
+
 linux-qcom-x1e (7.0.0-12.12) questing; urgency=medium
 
   * Rebase qcom-x1e onto 7.0
