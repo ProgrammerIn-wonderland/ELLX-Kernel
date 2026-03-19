@@ -1,3 +1,10 @@
+linux-qcom-x1e (7.0.0-14.14) questing; urgency=medium
+
+  * PCIe fix for all remaning DTBs:
+    - https://lore.kernel.org/linux-arm-msm/20260313094618.1361418-1-ziyue.zhang@oss.qualcomm.com/
+
+ -- Tobias Heider <tobias.heider@canonical.com>  Thu, 19 Mar 2026 14:26:33 +0100
+
 linux-qcom-x1e (7.0.0-13.13) questing; urgency=medium
 
   * Add x1p42100-hp-elitebook-6-g1q
