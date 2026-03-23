@@ -30,6 +30,8 @@ enum spi_transfer_cmd {
  * @cs: chip select toggle
  * @set_config: set peripheral config
  * @rx_len: receive length for buffer
+ * @qspi_flags: QSPI-specific flags for multi-lane support
+ * @dummy_clk_cnt: dummy clock cycles for QSPI
  */
 struct gpi_spi_config {
 	u8 set_config;
@@ -44,6 +46,8 @@ struct gpi_spi_config {
 	u32 clk_src;
 	enum spi_transfer_cmd cmd;
 	u32 rx_len;
+	u16 qspi_flags;
+	u8 dummy_clk_cnt;
 };
 
 enum i2c_op {

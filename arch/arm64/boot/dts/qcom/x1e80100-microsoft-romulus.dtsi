@@ -1448,6 +1448,57 @@
 		drive-strength = <2>;
 		bias-disable;
 	};
+
+	qup_spi19_cs: qup-spi19-cs-state {
+		pins = "gpio79";
+		function = "qup2_se3";
+		drive-strength = <6>;
+		bias-disable;
+	};
+
+	qup_spi19_data_clk: qup-spi19-data-clk-state {
+		pins = "gpio76", "gpio77", "gpio78";
+		function = "qup2_se3";
+		drive-strength = <6>;
+		bias-disable;
+	};
+
+	qup_spi19_sleep: qup-spi19-sleep-state {
+		pins = "gpio76", "gpio77", "gpio78", "gpio79";
+		function = "gpio";
+		drive-strength = <6>;
+		bias-disable;
+	};
+
+	spi19_hid0_reset_deassert: spi19-hid0-reset-deassert-state {
+		pins = "gpio65";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-high;
+	};
+
+	spi19_hid0_reset_assert: spi19-hid0-reset-assert-state {
+		pins = "gpio65";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
+
+	spi19_hid0_int_bias: spi19-hid0-int-bias-state {
+		pins = "gpio120";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	spi19_hid0_int_unbias: spi19-hid0-int-unbias-state {
+		pins = "gpio120";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
 };
 
 &uart2 {
@@ -1581,4 +1632,29 @@
 	vdda-pll-supply = <&vreg_l3c>;
 
 	status = "okay";
+};
+
+&spi19 {
+	status = "okay";
+
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&qup_spi19_data_clk>, <&qup_spi19_cs>;
+	pinctrl-1 = <&qup_spi19_sleep>;
+	spi-max-frequency = <20000000>;
+
+	touchpad@0 {
+		compatible = "hid-over-spi";
+		reg = <0>;
+		interrupts-extended = <&tlmm 120 IRQ_TYPE_EDGE_RISING>;
+		
+		pinctrl-names = "active", "sleep", "reset";
+		pinctrl-0 = <&spi19_hid0_reset_deassert &spi19_hid0_int_bias>;
+		pinctrl-1 = <&spi19_hid0_reset_assert &spi19_hid0_int_unbias>;
+		pinctrl-2 = <&spi19_hid0_reset_assert &spi19_hid0_int_bias>;
+		
+		reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+		
+		hid-descr-addr = <1>;
+		spi-max-frequency = <10000000>;
+	};
 };
