@@ -1905,7 +1905,7 @@ CONFIG_CC_NO_ARRAY_BOUNDS                       policy<{'arm64': 'y'}>
 CONFIG_CC_NO_STRINGOP_OVERFLOW                  policy<{'arm64': 'y'}>
 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE              policy<{'arm64': 'y'}>
 CONFIG_CC_OPTIMIZE_FOR_SIZE                     policy<{'arm64': 'n'}>
-CONFIG_CC_VERSION_TEXT                          policy<{'arm64': '"gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0"'}>
+CONFIG_CC_VERSION_TEXT                          policy<{'arm64': '"aarch64-linux-gnu-gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0"'}>
 CONFIG_CDNS_I3C_MASTER                          policy<{'arm64': 'm'}>
 CONFIG_CDROM                                    policy<{'arm64': 'y'}>
 CONFIG_CDX_BUS                                  policy<{'arm64': 'y'}>
@@ -10010,7 +10010,7 @@ CONFIG_SECURITY_APPARMOR_HASH                   policy<{'arm64': 'y'}>
 CONFIG_SECURITY_APPARMOR_HASH_DEFAULT           policy<{'arm64': 'y'}>
 CONFIG_SECURITY_APPARMOR_INTROSPECT_POLICY      policy<{'arm64': 'y'}>
 CONFIG_SECURITY_APPARMOR_PARANOID_LOAD          policy<{'arm64': 'y'}>
-CONFIG_SECURITY_APPARMOR_RESTRICT_USERNS	policy<{'arm64': 'y'}>
+CONFIG_SECURITY_APPARMOR_RESTRICT_USERNS        policy<{'arm64': 'y'}>
 CONFIG_SECURITY_DMESG_RESTRICT                  policy<{'arm64': 'y'}>
 CONFIG_SECURITY_INFINIBAND                      policy<{'arm64': 'y'}>
 CONFIG_SECURITY_IPE                             policy<{'arm64': 'n'}>
@@ -11469,6 +11469,7 @@ CONFIG_SPI_FSL_LPSPI                            policy<{'arm64': 'm'}>
 CONFIG_SPI_FSL_QUADSPI                          policy<{'arm64': 'm'}>
 CONFIG_SPI_FSL_SPI                              policy<{'arm64': 'y'}>
 CONFIG_SPI_GPIO                                 policy<{'arm64': 'm'}>
+CONFIG_SPI_HID                                  policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_KUNPENG                         policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC                             policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC_V3XX                        policy<{'arm64': 'm'}>

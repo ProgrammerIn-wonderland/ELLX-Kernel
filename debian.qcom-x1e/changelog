@@ -1,3 +1,9 @@
+linux-qcom-x1e (7.0.0-14.15) resolute; urgency=medium
+
+  * Aoi 
+
+ -- alice <alice@alicesworld.tech>  Sun, 22 Mar 2026 21:21:36 -0400
+
 linux-qcom-x1e (7.0.0-14.14) questing; urgency=medium
 
   * PCIe fix for all remaning DTBs:
