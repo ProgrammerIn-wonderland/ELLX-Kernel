@@ -76,6 +76,8 @@ static int ath12k_core_rfkill_config(struct ath12k_base *ab)
 
 	if (!(ab->target_caps.sys_cap_info & WMI_SYS_CAP_INFO_RFKILL))
 		return 0;
+        
+	return 0; // Microsoft Surface Laptop 7 Enumeration hack
 
 	if (ath12k_acpi_get_disable_rfkill(ab))
 		return 0;
