@@ -415,42 +415,61 @@ static int qspi_gsi_xfer_prepare(struct spi_transfer *xfer, struct spi_geni_mast
 	unsigned int buswidth;
 	unsigned int mode;
 
+	dev_dbg(mas->dev, "QSPI: xfer tx_buf=%p rx_buf=%p tx_nbits=%d rx_nbits=%d\n",
+		xfer->tx_buf, xfer->rx_buf, xfer->tx_nbits, xfer->rx_nbits);
+
 	if (xfer->tx_buf && xfer->rx_buf) {
 		if (xfer->tx_nbits != xfer->rx_nbits) {
-			dev_err(mas->dev, "tx_nbits %d, rx_nbits %d\n",
+			dev_err(mas->dev, "QSPI: tx_nbits %d != rx_nbits %d\n",
 				xfer->tx_nbits, xfer->rx_nbits);
 			return -EINVAL;
 		}
 
 		buswidth = xfer->tx_nbits;
 		*dummy_clk_cnt = QSPI_DUMMY_CLK_CNT;
+		dev_dbg(mas->dev, "QSPI: Full duplex, buswidth=%d, dummy_clk=%d\n",
+			buswidth, *dummy_clk_cnt);
 	} else if (xfer->tx_buf) {
 		buswidth = xfer->tx_nbits;
+		dev_dbg(mas->dev, "QSPI: TX only, buswidth=%d\n", buswidth);
 	} else if (xfer->rx_buf) {
 		buswidth = xfer->rx_nbits;
 		*dummy_clk_cnt = QSPI_DUMMY_CLK_CNT;
+		dev_dbg(mas->dev, "QSPI: RX only, buswidth=%d, dummy_clk=%d\n",
+			buswidth, *dummy_clk_cnt);
 	} else {
-		dev_err(mas->dev, "Neither tx_buf nor rx_buf provided.\n");
+		dev_err(mas->dev, "QSPI: Neither tx_buf nor rx_buf provided\n");
 		return -EINVAL;
+	}
+
+	/* If no nbits specified, assume single lane (backward compatibility) */
+	if (buswidth == 0) {
+		buswidth = QSPI_SINGLE_LANE;
+		dev_info(mas->dev, "QSPI: No buswidth specified, assuming single lane\n");
 	}
 
 	switch (buswidth) {
 	case QSPI_SINGLE_LANE:
 		if (mas->qspi_ddr_support) {
 			dev_err(mas->dev,
-				"DDR not supported for single lane.\n");
+				"QSPI: DDR not supported for single lane\n");
 			return -EPROTONOSUPPORT;
 		}
 		mode = QSPI_SINGLE_SDR;
+		dev_dbg(mas->dev, "QSPI: Using single lane SDR mode (0x%x)\n", mode);
 		break;
 	case QSPI_DUAL_LANE:
 		mode = mas->qspi_ddr_support ? QSPI_DUAL_DDR : QSPI_DUAL_SDR;
+		dev_info(mas->dev, "QSPI: Using dual lane %s mode (0x%x)\n",
+			 mas->qspi_ddr_support ? "DDR" : "SDR", mode);
 		break;
 	case QSPI_QUAD_LANE:
 		mode = mas->qspi_ddr_support ? QSPI_QUAD_DDR : QSPI_QUAD_SDR;
+		dev_info(mas->dev, "QSPI: Using quad lane %s mode (0x%x)\n",
+			 mas->qspi_ddr_support ? "DDR" : "SDR", mode);
 		break;
 	default:
-		dev_err(mas->dev, "Unsupported SPI bus width: %d\n", buswidth);
+		dev_err(mas->dev, "QSPI: Unsupported bus width: %d\n", buswidth);
 		return -EINVAL;
 	}
 
@@ -481,11 +500,18 @@ static int setup_gsi_xfer(struct spi_transfer *xfer, struct spi_geni_master *mas
 
 	/* Handle QSPI specific configuration */
 	if (mas->proto == GENI_SE_QSPI) {
+		dev_dbg(mas->dev, "GSI: Preparing QSPI transfer\n");
 		ret = qspi_gsi_xfer_prepare(xfer, mas, &dummy_clk_cnt, &qspi_flags);
-		if (ret)
+		if (ret) {
+			dev_err(mas->dev, "GSI: QSPI xfer prepare failed: %d\n", ret);
 			return ret;
+		}
 		peripheral.qspi_flags = qspi_flags;
 		peripheral.dummy_clk_cnt = dummy_clk_cnt;
+		dev_dbg(mas->dev, "GSI: QSPI flags=0x%x dummy_clk=%d\n",
+			qspi_flags, dummy_clk_cnt);
+	} else {
+		dev_dbg(mas->dev, "GSI: Standard SPI transfer (proto=%d)\n", mas->proto);
 	}
 
 	if (xfer->tx_buf && xfer->rx_buf) {
@@ -681,14 +707,18 @@ static int spi_geni_init(struct spi_geni_master *mas)
 
 	proto = geni_se_read_proto(se);
 	mas->proto = proto;
+	dev_info(mas->dev, "GENI SE protocol detected: %d (SPI=%d, QSPI=%d, SLAVE=%d)\n",
+		 proto, GENI_SE_SPI, GENI_SE_QSPI, GENI_SE_SPI_SLAVE);
 
 	if (spi->target) {
 		if (proto != GENI_SE_SPI_SLAVE) {
-			dev_err(mas->dev, "Invalid proto %d\n", proto);
+			dev_err(mas->dev, "Invalid proto %d for target mode\n", proto);
 			goto out_pm;
 		}
+		dev_info(mas->dev, "Configuring as SPI target\n");
 		spi_slv_setup(mas);
 	} else if (proto == GENI_SE_INVALID_PROTO) {
+		dev_info(mas->dev, "No firmware loaded, attempting to load SPI firmware\n");
 		/* Try to load SPI firmware first, QSPI firmware loading
 		 * would need to be handled separately if needed */
 		ret = geni_load_se_firmware(se, GENI_SE_SPI);
@@ -697,9 +727,14 @@ static int spi_geni_init(struct spi_geni_master *mas)
 			goto out_pm;
 		}
 		mas->proto = GENI_SE_SPI;
+		dev_info(mas->dev, "SPI firmware loaded successfully\n");
 	} else if (proto != GENI_SE_SPI && proto != GENI_SE_QSPI) {
-		dev_err(mas->dev, "Invalid proto %d\n", proto);
+		dev_err(mas->dev, "Unsupported protocol %d (expected SPI=%d or QSPI=%d)\n",
+			 proto, GENI_SE_SPI, GENI_SE_QSPI);
 		goto out_pm;
+	} else {
+		dev_info(mas->dev, "Using existing %s protocol\n",
+			 (proto == GENI_SE_QSPI) ? "QSPI" : "SPI");
 	}
 	mas->tx_fifo_depth = geni_se_get_tx_fifo_depth(se);
 
@@ -723,13 +758,16 @@ static int spi_geni_init(struct spi_geni_master *mas)
 		mas->oversampling = 1;
 
 	fifo_disable = readl(se->base + GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE;
+	dev_info(mas->dev, "FIFO_IF_DISABLE = %d, checking transfer modes\n", fifo_disable);
 	switch (fifo_disable) {
 	case 1:
+		dev_info(mas->dev, "Attempting to setup GPI DMA mode\n");
 		ret = spi_geni_grab_gpi_chan(mas);
 		if (!ret) { /* success case */
 			mas->cur_xfer_mode = GENI_GPI_DMA;
 			geni_se_select_mode(se, GENI_GPI_DMA);
-			dev_dbg(mas->dev, "Using GPI DMA mode for SPI\n");
+			dev_info(mas->dev, "Using GPI DMA mode for %s\n",
+				 (mas->proto == GENI_SE_QSPI) ? "QSPI" : "SPI");
 			break;
 		} else if (ret == -EPROBE_DEFER) {
 			goto out_pm;
@@ -742,6 +780,8 @@ static int spi_geni_init(struct spi_geni_master *mas)
 		fallthrough;
 
 	case 0:
+		dev_info(mas->dev, "Configuring FIFO mode for %s\n",
+			 (mas->proto == GENI_SE_QSPI) ? "QSPI" : "SPI");
 		mas->cur_xfer_mode = GENI_SE_FIFO;
 		geni_se_select_mode(se, GENI_SE_FIFO);
 		/* setup_fifo_params assumes that these registers start with a zero value */
@@ -752,6 +792,11 @@ static int spi_geni_init(struct spi_geni_master *mas)
 		writel(0, se->base + SE_SPI_DEMUX_OUTPUT_INV);
 		ret = 0;
 		break;
+	default:
+		dev_err(mas->dev, "Invalid FIFO_IF_DISABLE value %d, can't setup transfer mode\n",
+			fifo_disable);
+		ret = -EINVAL;
+		goto out_pm;
 	}
 
 	/* We never control CS manually */
@@ -871,6 +916,13 @@ static int setup_se_xfer(struct spi_transfer *xfer,
 	u32 len;
 	struct geni_se *se = &mas->se;
 	int ret;
+	
+	if (mas->proto == GENI_SE_QSPI) {
+		dev_dbg(mas->dev, "FIFO: QSPI transfer len=%d tx_buf=%p rx_buf=%p\n",
+			xfer->len, xfer->tx_buf, xfer->rx_buf);
+		/* For now, treat QSPI as single-lane SPI in FIFO mode */
+		dev_dbg(mas->dev, "FIFO: Treating QSPI as single-lane SPI\n");
+	}
 
 	/*
 	 * Ensure that our interrupt handler isn't still running from some
@@ -1199,6 +1251,11 @@ static int spi_geni_probe(struct platform_device *pdev)
 		spi->mode_bits = QSPI_SUPPORTED_MODES;
 		/* DDR Mode is not supported due to HW limitations for now. */
 		mas->qspi_ddr_support = false;
+		dev_info(mas->dev, "Probe: QSPI controller configured with modes 0x%x\n",
+			 spi->mode_bits);
+	} else {
+		dev_info(mas->dev, "Probe: SPI controller configured with modes 0x%x\n",
+			 spi->mode_bits);
 	}
 
 	/*
@@ -1211,7 +1268,15 @@ static int spi_geni_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return devm_spi_register_controller(dev, spi);
+	ret = devm_spi_register_controller(dev, spi);
+	if (!ret) {
+		dev_info(dev, "Probe successful: %s controller with %s mode, %d CS\n",
+			 (mas->proto == GENI_SE_QSPI) ? "QSPI" : "SPI",
+			 (mas->cur_xfer_mode == GENI_GPI_DMA) ? "GPI DMA" :
+			 (mas->cur_xfer_mode == GENI_SE_DMA) ? "SE DMA" : "FIFO",
+			 spi->num_chipselect);
+	}
+	return ret;
 }
 
 static int __maybe_unused spi_geni_runtime_suspend(struct device *dev)
