@@ -26,6 +26,7 @@
 #include <linux/pinctrl/consumer.h>
 
 #define SPI_NUM_CHIPSELECT	(4)
+#define SPI_CS_CNT_MAX		(4)
 // #ifdef OPLUS_FEATURE_SENSOR
 /* modify timeout to 6s for oplus_consumer_ir spi mode */
 // #define SPI_XFER_TIMEOUT_MS	(250)
@@ -166,8 +167,10 @@ if (dev) \
 	spi_trace_log(dev, x); \
 } while (0)
 
+/* Temporarily disable tracing to fix build issues
 #define CREATE_TRACE_POINTS
 #include "spi-qup-trace.h"
+*/
 
 /* FTRACE Logging */
 void spi_trace_log(struct device *dev, const char *fmt, ...)
@@ -180,7 +183,7 @@ void spi_trace_log(struct device *dev, const char *fmt, ...)
 
 	va_start(args, fmt);
 	vaf.va = &args;
-	trace_spi_log_info(dev_name(dev), &vaf);
+	/* trace_spi_log_info(dev_name(dev), &vaf); */
 	va_end(args);
 }
 

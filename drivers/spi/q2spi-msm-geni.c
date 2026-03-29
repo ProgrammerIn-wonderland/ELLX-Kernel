@@ -22,11 +22,15 @@
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <linux/uaccess.h>
+#include <linux/timer.h>
+#include <linux/gpio.h>
 #include "q2spi-msm.h"
 #include "q2spi-slave-reg.h"
 
+/* Temporarily disable tracing to fix build issues
 #define CREATE_TRACE_POINTS
 #include "q2spi-trace.h"
+*/
 
 static int q2spi_slave_init(struct q2spi_geni *q2spi, bool slave_init);
 static int q2spi_gsi_submit(struct q2spi_packet *q2spi_pkt);
@@ -44,7 +48,7 @@ void q2spi_trace_log(struct device *dev, const char *fmt, ...)
 
 	va_start(args, fmt);
 	vaf.va = &args;
-	trace_q2spi_log_info(dev_name(dev), &vaf);
+	/* trace_q2spi_log_info(dev_name(dev), &vaf); */
 	va_end(args);
 }
 
