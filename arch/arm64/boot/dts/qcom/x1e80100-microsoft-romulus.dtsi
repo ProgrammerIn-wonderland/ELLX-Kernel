@@ -1618,7 +1618,7 @@
 };
 
 &spi19 {
-	compatible = "qcom,q2spi-msm-geni";
+	compatible = "qcom,spi-msm-geni";
 	status = "okay";
 
 	pinctrl-names = "default", "sleep";
@@ -1629,17 +1629,20 @@
 	hid@0 {
 		compatible = "hid-over-spi";
 		reg = <0>;
-		/* Based on ACPI HSPI device MSHW0238, but using DT GPIO numbering */
-		interrupts-extended = <&tlmm 30 IRQ_TYPE_EDGE_FALLING>,
-				      <&tlmm 31 IRQ_TYPE_EDGE_FALLING>;
+		
+		/* Based on ACPI HSPI device MSHW0238 (GPIO 120 = interrupt, GPIO 65 = reset) */
+		interrupt-parent = <&tlmm>;
+		interrupts = <120 IRQ_TYPE_EDGE_FALLING>;
 
-		pinctrl-names = "active", "sleep", "reset";
+		reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
+
+		pinctrl-names = "default";
 		pinctrl-0 = <&spi19_hid0_reset_deassert &spi19_hid0_int_bias>;
-		pinctrl-1 = <&spi19_hid0_reset_assert &spi19_hid0_int_unbias>;
-		pinctrl-2 = <&spi19_hid0_reset_assert &spi19_hid0_int_bias>;
 
 		hid-descr-addr = <1>;
-		/* ACPI shows FourWireMode at 20MHz */
 		spi-max-frequency = <20000000>;
+
+		/* Power supply */
+		vdd-supply = <&vreg_l15b>;
 	};
 };

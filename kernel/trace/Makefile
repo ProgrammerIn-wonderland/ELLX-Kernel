@@ -127,4 +127,7 @@ obj-$(CONFIG_FPROBE_EVENTS) += trace_fprobe.o
 obj-$(CONFIG_TRACEPOINT_BENCHMARK) += trace_benchmark.o
 obj-$(CONFIG_RV) += rv/
 
+obj-$(CONFIG_IPC_LOGGING) += ipc_logging.o ipc_logging_debug.o
+obj-$(CONFIG_IPC_LOGGING_CDEV) += ipc_logging_cdev.o
+
 libftrace-y := ftrace.o

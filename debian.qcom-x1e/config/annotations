@@ -210,6 +210,10 @@ CONFIG_IOMMU_DEFAULT_DMA_STRICT                 note<'LP: #2071471'>
 CONFIG_IPV6                                     policy<{'arm64': 'y'}>
 CONFIG_IPV6                                     note<'if this is a module we get a module load for every ipv6 packet'>
 
+CONFIG_IPC_LOGGING                              policy<{'arm64': 'm'}>
+CONFIG_IPC_LOGGING_CDEV                         policy<{'arm64': 'm'}>
+CONFIG_IPC_LOG_MINIDUMP_BUFFERS                 policy<{'arm64': '10'}>
+
 CONFIG_KVM                                      policy<{'arm64': 'y'}>
 CONFIG_KVM                                      note<'LP: #1532886'>
 
@@ -8855,6 +8859,8 @@ CONFIG_QCOM_FASTRPC                             policy<{'arm64': 'm'}>
 CONFIG_QCOM_GDSC                                policy<{'arm64': 'y'}>
 CONFIG_QCOM_GENI_SE                             policy<{'arm64': 'y'}>
 CONFIG_QCOM_GPI_DMA                             policy<{'arm64': 'm'}>
+CONFIG_MSM_GPI_DMA                              policy<{'arm64': 'm'}>
+CONFIG_MSM_GPI_DMA_DEBUG                        policy<{'arm64': 'n'}>
 CONFIG_QCOM_GSBI                                policy<{'arm64': 'm'}>
 CONFIG_QCOM_HFPLL                               policy<{'arm64': 'y'}>
 CONFIG_QCOM_HIDMA                               policy<{'arm64': 'y'}>
@@ -9722,6 +9728,7 @@ CONFIG_RZ_MTU3_CNT                              policy<{'arm64': 'm'}>
 CONFIG_S2IO                                     policy<{'arm64': 'm'}>
 CONFIG_S32G_WDT                                 policy<{'arm64': 'n'}>
 CONFIG_SAMPLES                                  policy<{'arm64': 'y'}>
+CONFIG_SAMPLE_AUXDISPLAY                         policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_CONFIGFS                          policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_FTRACE_DIRECT                     policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_FTRACE_DIRECT_MULTI               policy<{'arm64': 'n'}>
@@ -9743,6 +9750,7 @@ CONFIG_SAMPLE_VFIO_MDEV_MBOCHS                  policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_VFIO_MDEV_MDPY                    policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_VFIO_MDEV_MDPY_FB                 policy<{'arm64': 'n'}>
 CONFIG_SAMPLE_VFIO_MDEV_MTTY                    policy<{'arm64': 'n'}>
+CONFIG_SAMPLE_WATCHDOG                           policy<{'arm64': 'n'}>
 CONFIG_SAR_GCC_2130P                            policy<{'arm64': 'm'}>
 CONFIG_SAR_GPUCC_2130P                          policy<{'arm64': 'm'}>
 CONFIG_SATA_ACARD_AHCI                          policy<{'arm64': 'm'}>
@@ -11431,6 +11439,7 @@ CONFIG_SPI_MESON_SPICC                          policy<{'arm64': 'm'}>
 CONFIG_SPI_MESON_SPIFC                          policy<{'arm64': 'm'}>
 CONFIG_SPI_MICROCHIP_CORE_QSPI                  policy<{'arm64': 'm'}>
 CONFIG_SPI_MICROCHIP_CORE_SPI                   policy<{'arm64': 'm'}>
+CONFIG_SPI_MSM_GENI                             policy<{'arm64': 'm'}>
 CONFIG_SPI_MT65XX                               policy<{'arm64': 'm'}>
 CONFIG_SPI_MTK_NOR                              policy<{'arm64': 'm'}>
 CONFIG_SPI_MTK_SNFI                             policy<{'arm64': 'm'}>
@@ -11449,6 +11458,7 @@ CONFIG_SPI_PCI1XXXX                             policy<{'arm64': 'm'}>
 CONFIG_SPI_PL022                                policy<{'arm64': 'm'}>
 CONFIG_SPI_POLARFIRE_SOC                        policy<{'arm64': 'm'}>
 CONFIG_SPI_QCOM_GENI                            policy<{'arm64': 'm'}>
+CONFIG_SPI_QCOM_GENI_MSM                        policy<{'arm64': 'm'}>
 CONFIG_SPI_QCOM_QSPI                            policy<{'arm64': 'm'}>
 CONFIG_SPI_QPIC_SNAND                           policy<{'arm64': 'n'}>
 CONFIG_SPI_QUP                                  policy<{'arm64': 'm'}>
@@ -11461,6 +11471,10 @@ CONFIG_SPI_RZV2M_CSI                            policy<{'arm64': 'm'}>
 CONFIG_SPI_SC18IS602                            policy<{'arm64': 'm'}>
 CONFIG_SPI_SH_HSPI                              policy<{'arm64': 'm'}>
 CONFIG_SPI_SH_MSIOF                             policy<{'arm64': 'm'}>
+CONFIG_SPI_HID                                  policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_ACPI                             policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_CORE                             policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_OF                               policy<{'arm64': 'm'}>
 CONFIG_SPI_SIFIVE                               policy<{'arm64': 'm'}>
 CONFIG_SPI_SLAVE                                policy<{'arm64': 'y'}>
 CONFIG_SPI_SLAVE_MT27XX                         policy<{'arm64': 'm'}>
