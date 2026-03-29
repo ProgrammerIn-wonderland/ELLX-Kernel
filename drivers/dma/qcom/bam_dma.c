@@ -44,8 +44,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/ipc_logging.h>
 
-#include "drivers/dma/dmaengine.h"
-#include "drivers/dma/virt-dma.h"
+#include "../dmaengine.h"
+#include "../virt-dma.h"
 
 struct bam_desc_hw {
 	__le32 addr;		/* Buffer physical address */
@@ -61,7 +61,7 @@ struct bam_desc_hw {
 #define DESC_FLAG_NWD BIT(12)
 #define DESC_FLAG_CMD BIT(11)
 
-#define CREATE_TRACE_POINTS
+// #define CREATE_TRACE_POINTS
 #include "bam_dma_trace.h"
 
 /* FTRACE Logging */
@@ -1622,7 +1622,7 @@ static const struct dev_pm_ops bam_dma_pm_ops = {
 
 static struct platform_driver bam_dma_driver = {
 	.probe = bam_dma_probe,
-	.remove_new = bam_dma_remove,
+	.remove = bam_dma_remove,
 	.driver = {
 		.name = "bam-dma-engine",
 		.pm = &bam_dma_pm_ops,
