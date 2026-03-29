@@ -1,3 +1,9 @@
+linux-qcom-x1e (6.19.0-3.4) UNRELEASED; urgency=medium
+
+  * rfkill
+
+ -- alice <alice@alice-Microsoft-Surface-Laptop-7th-Edition>  Mon, 26 Jan 2026 21:27:11 -0500
+
 linux-qcom-x1e (6.19.0-3.3) questing; urgency=medium
 
   [ Jérôme de Bretagne ]
