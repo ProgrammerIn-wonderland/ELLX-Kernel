@@ -3704,6 +3704,7 @@ static void __exit spi_dev_exit(void)
 module_init(spi_dev_init);
 module_exit(spi_dev_exit);
 
+MODULE_DESCRIPTION("Qualcomm Technologies Inc MSM GENI SPI controller driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:spi_geni");
 

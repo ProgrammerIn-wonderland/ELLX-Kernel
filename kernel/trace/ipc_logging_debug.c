@@ -189,3 +189,6 @@ void create_ctx_debugfs(struct ipc_log_context *ctxt,
 				 TSV_TYPE_STRING, dfunc_string);
 }
 EXPORT_SYMBOL(create_ctx_debugfs);
+
+MODULE_DESCRIPTION("IPC logging debugfs interface");
+MODULE_LICENSE("GPL v2");

@@ -195,3 +195,6 @@ void ipc_log_cdev_init(void)
 	cdev_class->devnode = ipc_log_cdev_devnode;
 }
 EXPORT_SYMBOL(ipc_log_cdev_init);
+
+MODULE_DESCRIPTION("IPC logging character device interface");
+MODULE_LICENSE("GPL v2");
