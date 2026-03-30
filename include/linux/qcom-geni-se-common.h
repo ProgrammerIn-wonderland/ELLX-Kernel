@@ -27,7 +27,6 @@
 #define IPC_LOG_KPI_PAGES	(4)  // KPI IPC Log size
 
 #define GENI_SE_ERR(log_ctx, print, dev, x...) do { \
-ipc_log_string(log_ctx, x); \
 if (print) { \
 	if (dev) \
 		dev_err((dev), x); \
@@ -37,7 +36,6 @@ if (print) { \
 } while (0)
 
 #define GENI_SE_DBG(log_ctx, print, dev, x...) do { \
-ipc_log_string(log_ctx, x); \
 if (print) { \
 	if (dev) \
 		dev_dbg((dev), x); \

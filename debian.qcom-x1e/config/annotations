@@ -5496,9 +5496,6 @@ CONFIG_IP6_NF_TARGET_NPT                        policy<{'arm64': 'm'}>
 CONFIG_IP6_NF_TARGET_REJECT                     policy<{'arm64': 'm'}>
 CONFIG_IP6_NF_TARGET_SYNPROXY                   policy<{'arm64': 'm'}>
 CONFIG_IPACK_BUS                                policy<{'arm64': 'm'}>
-CONFIG_IPC_LOGGING                              policy<{'arm64': 'm'}>
-CONFIG_IPC_LOGGING_CDEV                         policy<{'arm64': 'm'}>
-CONFIG_IPC_LOG_MINIDUMP_BUFFERS                 policy<{'arm64': '10'}>
 CONFIG_IPC_NS                                   policy<{'arm64': 'y'}>
 CONFIG_IPMB_DEVICE_INTERFACE                    policy<{'arm64': 'm'}>
 CONFIG_IPMI_DEVICE_INTERFACE                    policy<{'arm64': 'm'}>

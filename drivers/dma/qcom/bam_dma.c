@@ -81,20 +81,7 @@ static void __ftrace_dbg(struct device *dev, const char *fmt, ...)
 #define ftrace_dbg(dev, fmt, ...)            \
 	__ftrace_dbg(dev, fmt, ##__VA_ARGS__)\
 
-#ifdef CONFIG_DEBUG_FS
-#define DMA_IPC_LOGPAGES 1
-#define DMA_BAM_DBG(ctxt, dev, fmt...) do {  \
-	if (ctxt) {			     \
-		ipc_log_string(ctxt, fmt);   \
-	}				     \
-	ftrace_dbg(dev, fmt);		     \
-} while (0)
-#else
-#define DMA_BAM_DBG(ctxt, dev, fmt...) do {  \
-	pr_debug(fmt);			     \
-	ftrace_dbg(dev, fmt);		     \
-} while (0)
-#endif
+#define DMA_BAM_DBG(ctxt, dev, fmt...) do { } while (0)
 
 struct bam_async_desc {
 	struct virt_dma_desc vd;
@@ -459,8 +446,6 @@ struct bam_device {
 	/* dma start transaction tasklet */
 	struct tasklet_struct task;
 	struct remote_mem r_mem;
-
-	void *ipc_log_dma;
 };
 
 /**
@@ -591,7 +576,7 @@ static void bam_chan_init_hw(struct bam_chan *bchan,
 	bchan->head = 0;
 	bchan->tail = 0;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s: bam_desc_fifo:%d\n", __func__, BAM_DESC_FIFO_SIZE);
 }
 
@@ -623,7 +608,7 @@ static int bam_alloc_chan(struct dma_chan *chan)
 		bdev->r_mem.r_vbase = bdev->r_mem.r_vbase + (MSM_SLIM_DESC_NUM * 8);
 		bdev->r_mem.r_res->start = bdev->r_mem.r_res->start + (MSM_SLIM_DESC_NUM * 8);
 
-		DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+		DMA_BAM_DBG(NULL, bdev->dev,
 			    "dma_bam:%s: r_mem_virt_base:%p r_mem_start:%llx\n",
 			    __func__, bdev->r_mem.r_vbase,
 			    bdev->r_mem.r_res->start);
@@ -636,7 +621,7 @@ static int bam_alloc_chan(struct dma_chan *chan)
 
 	if (bdev->active_channels++ == 0 && bdev->powered_remotely)
 		bam_reset(bdev);
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	return 0;
 }
@@ -656,7 +641,7 @@ static void bam_free_chan(struct dma_chan *chan)
 	unsigned long flags;
 	int ret;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	ret = pm_runtime_get_sync(bdev->dev);
 	if (ret < 0)
@@ -718,7 +703,7 @@ static int bam_slave_config(struct dma_chan *chan,
 	struct bam_chan *bchan = to_bam_chan(chan);
 	unsigned long flag;
 
-	DMA_BAM_DBG(bchan->bdev->ipc_log_dma, bchan->bdev->dev,
+	DMA_BAM_DBG(NULL, bchan->bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	spin_lock_irqsave(&bchan->vc.lock, flag);
 	memcpy(&bchan->slave, cfg, sizeof(*cfg));
@@ -751,7 +736,7 @@ static struct dma_async_tx_descriptor *bam_prep_slave_sg(struct dma_chan *chan,
 	struct bam_desc_hw *desc;
 	unsigned int num_alloc = 0;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s DMA direction:%d\n", __func__, direction);
 	if (!is_slave_direction(direction)) {
 		dev_err(bdev->dev, "invalid dma direction\n");
@@ -824,7 +809,7 @@ static int bam_dma_terminate_all(struct dma_chan *chan)
 	unsigned long flag;
 	LIST_HEAD(head);
 
-	DMA_BAM_DBG(bchan->bdev->ipc_log_dma, bchan->bdev->dev,
+	DMA_BAM_DBG(NULL, bchan->bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	/* remove all transactions, including active transaction */
 	spin_lock_irqsave(&bchan->vc.lock, flag);
@@ -873,7 +858,7 @@ static int bam_pause(struct dma_chan *chan)
 	unsigned long flag;
 	int ret;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	ret = pm_runtime_get_sync(bdev->dev);
 	if (ret < 0)
@@ -901,7 +886,7 @@ static int bam_resume(struct dma_chan *chan)
 	unsigned long flag;
 	int ret;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	ret = pm_runtime_get_sync(bdev->dev);
 	if (ret < 0)
@@ -1053,7 +1038,7 @@ static enum dma_status bam_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
 	unsigned int i;
 	unsigned long flags;
 
-	DMA_BAM_DBG(bchan->bdev->ipc_log_dma, bchan->bdev->dev,
+	DMA_BAM_DBG(NULL, bchan->bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	ret = dma_cookie_status(chan, cookie, txstate);
 	if (ret == DMA_COMPLETE)
@@ -1127,7 +1112,7 @@ static void bam_start_dma(struct bam_chan *bchan)
 	unsigned int avail;
 	struct dmaengine_desc_callback cb;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	lockdep_assert_held(&bchan->vc.lock);
 
@@ -1248,7 +1233,7 @@ static void bam_issue_pending(struct dma_chan *chan)
 	struct bam_device *bdev = bchan->bdev;
 	unsigned long flags;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s chan id:%d\n", __func__, bchan->id);
 	spin_lock_irqsave(&bchan->vc.lock, flags);
 
@@ -1279,7 +1264,7 @@ static struct dma_chan *bam_dma_xlate(struct of_phandle_args *dma_spec,
 					struct bam_device, common);
 	unsigned int request;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s No of channels:%d\n", __func__, bdev->num_channels);
 	if (dma_spec->args_count != 1)
 		return NULL;
@@ -1320,7 +1305,7 @@ static int bam_init(struct bam_device *bdev)
 	if (!bdev->controlled_remotely && !bdev->powered_remotely)
 		bam_reset(bdev);
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s ret:%d\n", __func__, 0);
 	return 0;
 }
@@ -1370,12 +1355,8 @@ static int bam_dma_probe(struct platform_device *pdev)
 	if (IS_ERR(bdev->regs))
 		return PTR_ERR(bdev->regs);
 
-	bdev->ipc_log_dma = ipc_log_context_create(DMA_IPC_LOGPAGES,
-							"dma_bam_log", 0);
-	if (!bdev->ipc_log_dma)
-		dev_err(bdev->dev, "Failed to create dma bam log\n");
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s start %d\n", __func__, true);
 
 	bdev->r_mem.is_r_mem = false;
@@ -1512,7 +1493,7 @@ static int bam_dma_probe(struct platform_device *pdev)
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev,
+	DMA_BAM_DBG(NULL, bdev->dev,
 		    "%s end ret:%d\n", __func__, 0);
 	return 0;
 
@@ -1534,9 +1515,7 @@ static void bam_dma_remove(struct platform_device *pdev)
 	struct bam_device *bdev = platform_get_drvdata(pdev);
 	u32 i;
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev, "%s ret:%d\n", __func__, 0);
-	if (bdev->ipc_log_dma)
-		ipc_log_context_destroy(bdev->ipc_log_dma);
+	DMA_BAM_DBG(NULL, bdev->dev, "%s ret:%d\n", __func__, 0);
 
 	pm_runtime_force_suspend(&pdev->dev);
 
@@ -1595,7 +1574,7 @@ static int __maybe_unused bam_dma_suspend(struct device *dev)
 	pm_runtime_force_suspend(dev);
 	clk_unprepare(bdev->bamclk);
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev, "%s ret:%d\n", __func__, 0);
+	DMA_BAM_DBG(NULL, bdev->dev, "%s ret:%d\n", __func__, 0);
 	return 0;
 }
 
@@ -1610,7 +1589,7 @@ static int __maybe_unused bam_dma_resume(struct device *dev)
 
 	pm_runtime_force_resume(dev);
 
-	DMA_BAM_DBG(bdev->ipc_log_dma, bdev->dev, "%s ret:%d\n", __func__, 0);
+	DMA_BAM_DBG(NULL, bdev->dev, "%s ret:%d\n", __func__, 0);
 	return 0;
 }
 
