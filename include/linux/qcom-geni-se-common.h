@@ -11,7 +11,6 @@
 #include <linux/io.h>
 #include <linux/dma-mapping.h>
 #include <linux/sched/clock.h>
-#include <linux/ipc_logging.h>
 
 #ifdef CONFIG_ARM64
 #define GENI_SE_DMA_PTR_L(ptr) ((u32)ptr)
@@ -213,8 +212,6 @@ static inline int geni_common_icc_set_bw(struct geni_se *se, void *ipcl)
 			return ret;
 		}
 
-		ipc_log_string(ipcl, "ICC BW voting on path: %s, avg_bw: %u, peak_bw: %u\n",
-			       icc_path_names[i], avg_bw, peak_bw);
 	}
 
 	return 0;

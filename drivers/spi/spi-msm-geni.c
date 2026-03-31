@@ -1690,7 +1690,7 @@ static int spi_geni_prepare_message(struct spi_controller *spi, struct spi_messa
 				count =
 				atomic_read(&mas->dev->power.usage_count);
 				if (count <= 0) {
-					
+
 				}
 			}
 		} else {
