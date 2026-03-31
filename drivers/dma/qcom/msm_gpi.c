@@ -3828,8 +3828,7 @@ static void gpi_setup_debug(struct gpi_dev *gpi_dev)
 	snprintf(node_name, sizeof(node_name), "%s%llx", GPI_DMA_DRV_NAME,
 		 (u64)gpi_dev->res->start);
 
-	gpi_dev->ilctxt = ipc_log_context_create(IPC_LOG_PAGES,
-						 node_name, 0);
+	gpi_dev->ilctxt = NULL;
 	gpi_dev->ipc_log_lvl = DEFAULT_IPC_LOG_LVL;
 	if (!IS_ERR_OR_NULL(pdentry)) {
 		snprintf(node_name, sizeof(node_name), "%llx",
@@ -3854,8 +3853,7 @@ static void gpi_setup_debug(struct gpi_dev *gpi_dev)
 		snprintf(gpii->label, sizeof(gpii->label),
 			 "%s%llx_gpii%d",
 			 GPI_DMA_DRV_NAME, (u64)gpi_dev->res->start, i);
-		gpii->ilctxt = ipc_log_context_create(IPC_LOG_PAGES,
-						      gpii->label, 0);
+		gpii->ilctxt = NULL;
 		gpii->ipc_log_lvl = DEFAULT_IPC_LOG_LVL;
 		gpii->klog_lvl = DEFAULT_KLOG_LVL;
 
@@ -4164,17 +4162,11 @@ static void gpi_remove(struct platform_device *pdev)
 
 			gpi_free_chan_resources(&gpii_chan->vc.chan);
 		}
-
-		if (gpii->ilctxt)
-			ipc_log_context_destroy(gpii->ilctxt);
 	}
 
 	for (i = 0; i < arr_idx; i++)
 		gpi_dev_dbg[i] = NULL;
 	arr_idx = 0;
-
-	if (gpi_dev->ilctxt)
-		ipc_log_context_destroy(gpi_dev->ilctxt);
 
 	debugfs_remove(pdentry);
 }

@@ -236,7 +236,6 @@ enum msm_gpi_tre_type {
 #define GPI_EV_PRIORITY_BMSK (0x1)
 
 #define GSI_SE_ERR(log_ctx, print, dev, x...) do { \
-ipc_log_string(log_ctx, x); \
 if (print) { \
 	if (dev) \
 		dev_err((dev), x); \
@@ -246,7 +245,6 @@ if (print) { \
 } while (0)
 
 #define GSI_SE_DBG(log_ctx, print, dev, x...) do { \
-ipc_log_string(log_ctx, x); \
 if (print) { \
 	if (dev) \
 		dev_dbg((dev), x); \
