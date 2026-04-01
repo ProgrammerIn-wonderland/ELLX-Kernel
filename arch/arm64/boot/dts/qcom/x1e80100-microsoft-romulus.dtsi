@@ -1618,9 +1618,11 @@
 };
 
 &spi19 {
-	compatible = "qcom,spi-msm-geni";
+	compatible = "qcom,qspi-geni";
 	status = "okay";
 
+	reg-names = "se_phys";
+	interrupts = <GIC_SPI 843 IRQ_TYPE_LEVEL_HIGH>;
 	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&qup_spi19_data_clk>, <&qup_spi19_cs>;
 	pinctrl-1 = <&qup_spi19_sleep>;
@@ -1629,20 +1631,14 @@
 	hid@0 {
 		compatible = "hid-over-spi";
 		reg = <0>;
-		
-		/* Based on ACPI HSPI device MSHW0238 (GPIO 120 = interrupt, GPIO 65 = reset) */
-		interrupt-parent = <&tlmm>;
-		interrupts = <120 IRQ_TYPE_EDGE_FALLING>;
+		interrupts-extended = <&tlmm 30 IRQ_TYPE_EDGE_RISING>,
+		<&tlmm 31 IRQ_TYPE_EDGE_RISING>;
 
-		reset-gpios = <&tlmm 65 GPIO_ACTIVE_LOW>;
-
-		pinctrl-names = "default";
+		pinctrl-names = "active", "sleep", "reset";
 		pinctrl-0 = <&spi19_hid0_reset_deassert &spi19_hid0_int_bias>;
+		pinctrl-1 = <&spi19_hid0_reset_assert &spi19_hid0_int_unbias>;
+		pinctrl-2 = <&spi19_hid0_reset_assert &spi19_hid0_int_bias>;
 
 		hid-descr-addr = <1>;
-		spi-max-frequency = <20000000>;
-
-		/* Power supply */
-		vdd-supply = <&vreg_l15b>;
 	};
 };

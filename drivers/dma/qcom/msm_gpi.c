@@ -4172,7 +4172,7 @@ static void gpi_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id gpi_of_match[] = {
-	{ .compatible = "qcom,gpi-dma" },
+	{ .compatible = "qcom,x1e80100-gpi-dma" },
 	{}
 };
 MODULE_DEVICE_TABLE(of, gpi_of_match);

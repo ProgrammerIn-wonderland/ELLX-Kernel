@@ -2802,7 +2802,7 @@ static int geni_spi_resources_init(struct platform_device *pdev, struct spi_geni
 		return ret;
 	}
 
-	geni_mas->spi_rsc.clk = devm_clk_get(&pdev->dev, "se-clk");
+	geni_mas->spi_rsc.clk = devm_clk_get(&pdev->dev, "se");
 	if (IS_ERR(geni_mas->spi_rsc.clk)) {
 		ret = PTR_ERR(geni_mas->spi_rsc.clk);
 		dev_err(&pdev->dev,
