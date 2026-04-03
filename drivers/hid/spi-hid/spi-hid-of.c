@@ -98,6 +98,7 @@ static int spi_hid_of_populate_config(struct spi_hid_of_config *conf,
 
 	/* FIXME: not reading hid-over-spi-flags, multi-fragment not supported */
 
+	dev_err(dev, "At devreg");
 	conf->supply = devm_regulator_get(dev, "vdd");
 	if (IS_ERR(conf->supply)) {
 		if (PTR_ERR(conf->supply) != -EPROBE_DEFER)
@@ -106,18 +107,21 @@ static int spi_hid_of_populate_config(struct spi_hid_of_config *conf,
 		return PTR_ERR(conf->supply);
 	}
 	conf->supply_enabled = false;
+	dev_err(dev, "Did devreg");
 
 	conf->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(conf->reset_gpio)) {
 		dev_err(dev, "%s: error getting reset GPIO.", __func__);
 		return PTR_ERR(conf->reset_gpio);
 	}
-
+	dev_err(dev, "Finished config pop");
+	pr_err("And I'm peter griffin");
 	return 0;
 }
 
 static int spi_hid_of_power_down(struct spihid_ops *ops)
 {
+	pr_err("loading power down conf");
 	struct spi_hid_of_config *conf = container_of(ops,
 						      struct spi_hid_of_config,
 						      ops);
@@ -135,17 +139,21 @@ static int spi_hid_of_power_down(struct spihid_ops *ops)
 
 static int spi_hid_of_power_up(struct spihid_ops *ops)
 {
+	pr_err("loading power up conf");
 	struct spi_hid_of_config *conf = container_of(ops,
 						      struct spi_hid_of_config,
 						      ops);
 	int error;
 
+	pr_err("Powering up");
+
 	if (conf->supply_enabled)
 		return 0;
-
+	pr_err("Enabling reg");
 	error = regulator_enable(conf->supply);
 
 	if (error == 0) {
+		pr_err("Enabled reg");
 		conf->supply_enabled = true;
 		usleep_range(1000 * conf->post_power_on_delay_ms,
 			     1000 * (conf->post_power_on_delay_ms + 1));
@@ -156,6 +164,7 @@ static int spi_hid_of_power_up(struct spihid_ops *ops)
 
 static int spi_hid_of_assert_reset(struct spihid_ops *ops)
 {
+	pr_err("loading assert reset conf");
 	struct spi_hid_of_config *conf = container_of(ops,
 						      struct spi_hid_of_config,
 						      ops);
@@ -166,6 +175,7 @@ static int spi_hid_of_assert_reset(struct spihid_ops *ops)
 
 static int spi_hid_of_deassert_reset(struct spihid_ops *ops)
 {
+	pr_err("loading deassert reset conf");
 	struct spi_hid_of_config *conf = container_of(ops,
 						      struct spi_hid_of_config,
 						      ops);
@@ -185,6 +195,7 @@ static void spi_hid_of_sleep_minimal_reset_delay(struct spihid_ops *ops)
 
 static int spi_hid_of_probe(struct spi_device *spi)
 {
+	pr_err("probing");
 	struct device *dev = &spi->dev;
 	struct spi_hid_of_config *config;
 	int error;
@@ -206,6 +217,7 @@ static int spi_hid_of_probe(struct spi_device *spi)
 		dev_err(dev, "%s: unable to populate config data.", __func__);
 		return error;
 	}
+	pr_err("We up in here probed that shit (pass to core)");
 
 	return spi_hid_core_probe(spi, &config->ops, &config->property_conf);
 }

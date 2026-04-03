@@ -45,6 +45,7 @@
 #include <linux/unaligned.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <linux/console.h>
 
 #include "../hid-ids.h"
 #include "spi-hid.h"
@@ -1269,8 +1270,8 @@ static int spi_hid_dev_init(struct spi_hid *shid)
 	struct spi_device *spi = shid->spi;
 	struct device *dev = &spi->dev;
 	int error;
-
-	shid->ops->custom_init(shid->ops);
+	if (shid->ops->custom_init)
+		shid->ops->custom_init(shid->ops);
 
 	shid->ops->assert_reset(shid->ops);
 
@@ -1386,30 +1387,55 @@ static int spi_hid_register_panel_follower(struct spi_hid *shid)
 int spi_hid_core_probe(struct spi_device *spi, struct spihid_ops *ops,
 		       struct spi_hid_conf *conf)
 {
+	pr_err("probing ts");
 	struct device *dev = &spi->dev;
 	struct spi_hid *shid;
 	int error;
+	pr_err("Okay I have dev ig");
 
 	if (spi->irq <= 0)
 		return dev_err_probe(dev, spi->irq ?: -EINVAL, "Missing IRQ\n");
 
+	pr_err("kzalloced");
 	shid = devm_kzalloc(dev, sizeof(*shid), GFP_KERNEL);
 	if (!shid)
 		return -ENOMEM;
 
+	pr_err("starting said derefs");
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	shid->spi = spi;
+	pr_err("spi");
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	shid->power_state = HIDSPI_ON;
+	pr_err("ps");
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	shid->ops = ops;
+	pr_err("ops");
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	shid->conf = conf;
 	set_bit(SPI_HID_RESET_PENDING, &shid->flags);
+	pr_err("confs");
+
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
+	set_bit(SPI_HID_RESET_PENDING, &shid->flags);
+	pr_err("bits");
+
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	shid->is_panel_follower = drm_is_panel_follower(&spi->dev);
-
+	pr_err("Bunch of derefs");
+	// msleep(5000);
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 	spi_set_drvdata(spi, shid);
+	pr_err("DRV data");
+	// msleep(5000);
 
+	pr_err("Reading approvals");
+	// msleep(5000);
 	/* Using now populated conf let's pre-calculate the read approvals */
 	spi_hid_populate_read_approvals(shid->conf, shid->read_approval_header,
 					shid->read_approval_body);
-
+	pr_err("Read approvals");
+	// msleep(5000);
 	mutex_init(&shid->output_lock);
 	mutex_init(&shid->power_lock);
 	init_completion(&shid->output_done);
@@ -1440,7 +1466,7 @@ int spi_hid_core_probe(struct spi_device *spi, struct spihid_ops *ops,
 
 	dev_dbg(dev, "%s: d3 -> %s.", __func__,
 		spi_hid_power_mode_string(shid->power_state));
-
+	pr_err("Done did probe");
 	return 0;
 }
 EXPORT_SYMBOL_GPL(spi_hid_core_probe);
