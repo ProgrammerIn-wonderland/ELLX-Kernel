@@ -1,11 +1,16 @@
-# SPDX-License-Identifier: GPL-2.0-only
-#
-# Makefile for the SPI HID input drivers
-#
-# Copyright (c) 2021 Microsoft Corporation
-#
+ifneq ($(KERNELRELEASE),)
+obj-m += spi-hid.o
+spi-hid-objs := spi-hid-core.o
+else
+KERNEL_DIR ?= /lib/modules/$(shell uname -r)/build
+PWD := $(shell pwd)
 
-obj-$(CONFIG_SPI_HID_CORE)	+= spi-hid.o
-spi-hid-objs 			= spi-hid-core.o
-obj-$(CONFIG_SPI_HID_ACPI)	+= spi-hid-acpi.o
-obj-$(CONFIG_SPI_HID_OF)	+= spi-hid-of.o
+all:
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
+
+clean:
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) clean
+
+install:
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
+endif
