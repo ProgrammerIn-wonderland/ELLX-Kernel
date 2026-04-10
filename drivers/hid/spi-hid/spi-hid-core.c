@@ -1,616 +1,619 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * HID over SPI protocol implementation
+ * HID over SPI (HIDSPI v3) transport driver for QSPI touchpads.
  *
- * Copyright (c) 2021 Microsoft Corporation
- * Copyright (c) 2026 Google LLC
- *
- * This code is partly based on "HID over I2C protocol implementation:
- *
- *  Copyright (c) 2012 Benjamin Tissoires <benjamin.tissoires@gmail.com>
- *  Copyright (c) 2012 Ecole Nationale de l'Aviation Civile, France
- *  Copyright (c) 2012 Red Hat, Inc
- *
- *  which in turn is partly based on "USB HID support for Linux":
- *
- *  Copyright (c) 1999 Andreas Gal
- *  Copyright (c) 2000-2005 Vojtech Pavlik <vojtech@suse.cz>
- *  Copyright (c) 2005 Michael Haboustak <mike-@cinci.rr.com> for Concept2, Inc
- *  Copyright (c) 2007-2008 Oliver Neukum
- *  Copyright (c) 2006-2010 Jiri Kosina
+ * Based on Microsoft's spi-hid v2 driver.
+ * Copyright (c) 2020 Microsoft Corporation
  */
 
-#include <linux/completion.h>
-#include <linux/crc32.h>
-#include <linux/delay.h>
-#include <linux/device.h>
-#include <linux/dma-mapping.h>
-#include <linux/err.h>
-#include <linux/hid.h>
-#include <linux/hid-over-spi.h>
-#include <linux/input.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/jiffies.h>
-#include <linux/kernel.h>
-#include <linux/list.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
-#include <linux/pm.h>
-#include <linux/pm_wakeirq.h>
-#include <linux/slab.h>
 #include <linux/spi/spi.h>
-#include <linux/string.h>
-#include <linux/sysfs.h>
-#include <linux/unaligned.h>
+#include <linux/interrupt.h>
+#include <linux/input.h>
+#include <linux/irq.h>
+#include <linux/delay.h>
+#include <linux/slab.h>
+#include <linux/device.h>
 #include <linux/wait.h>
+#include <linux/err.h>
+#include <linux/io.h>
+#include <linux/pm_runtime.h>
+#include <linux/string.h>
+#include <linux/kernel.h>
+#include <linux/hid.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/regulator/consumer.h>
 #include <linux/workqueue.h>
 
-#include "../hid-ids.h"
-#include "spi-hid.h"
 #include "spi-hid-core.h"
 
-/* quirks to control the device */
-#define SPI_HID_QUIRK_MODE_SWITCH	BIT(0)
-#define SPI_HID_QUIRK_READ_DELAY	BIT(1)
-
-/* Protocol constants */
-#define SPI_HID_READ_APPROVAL_CONSTANT		0xff
-#define SPI_HID_INPUT_HEADER_SYNC_BYTE		0x5a
-#define SPI_HID_INPUT_HEADER_VERSION		0x03
-#define SPI_HID_SUPPORTED_VERSION		0x0300
-
-#define SPI_HID_OUTPUT_REPORT_CONTENT_ID_DESC_REQUEST	0x00
-
-#define SPI_HID_MAX_RESET_ATTEMPTS	3
-#define SPI_HID_RESP_TIMEOUT		1000
-
-/* Protocol message size constants */
-#define SPI_HID_READ_APPROVAL_LEN		5
-#define SPI_HID_OUTPUT_HEADER_LEN		8
-
-/* flags */
-/*
- * ready flag indicates that the FW is ready to accept commands and
- * requests. The FW becomes ready after sending the report descriptor.
- */
-#define SPI_HID_READY	0
-/*
- * refresh_in_progress is set to true while the refresh_device worker
- * thread is destroying and recreating the hidraw device. When this flag
- * is set to true, the ll_close and ll_open functions will not cause
- * power state changes.
- */
-#define SPI_HID_REFRESH_IN_PROGRESS	1
-/*
- * reset_pending indicates that the device is being reset. When this flag
- * is set to true, garbage interrupts triggered during reset will be
- * dropped and will not cause error handling.
- */
-#define SPI_HID_RESET_PENDING	2
-#define SPI_HID_RESET_RESPONSE	3
-#define SPI_HID_CREATE_DEVICE	4
-#define SPI_HID_ERROR	5
-
-static const struct spi_hid_quirks {
-	__u16 idVendor;
-	__u16 idProduct;
-	__u32 quirks;
-} spi_hid_quirks[] = {
-	{ USB_VENDOR_ID_ILITEK, HID_ANY_ID,
-		SPI_HID_QUIRK_MODE_SWITCH | SPI_HID_QUIRK_READ_DELAY },
-	{ 0, 0 }
-};
-
-/* Processed data from input report header */
-struct spi_hid_input_header {
-	u8 version;
-	u16 report_length;
-	u8 last_fragment_flag;
-	u8 sync_const;
-};
-
-/* Processed data from an input report */
-struct spi_hid_input_report {
-	u8 report_type;
-	u16 content_length;
-	u8 content_id;
-	u8 *content;
-};
-
-/* Data necessary to send an output report */
-struct spi_hid_output_report {
-	u8 report_type;
-	u16 content_length;
-	u8 content_id;
-	u8 *content;
-};
-
 static struct hid_ll_driver spi_hid_ll_driver;
+static int spi_hid_process_input_report(struct spi_hid *shid,
+					 const u8 *body, int body_len);
 
-/**
- * spi_hid_lookup_quirk: return any quirks associated with a SPI HID device
- * @idVendor: the 16-bit vendor ID
- * @idProduct: the 16-bit product ID
- *
- * Returns: a u32 quirks value.
- */
-static u32 spi_hid_lookup_quirk(const u16 idVendor, const u16 idProduct)
+/* QSPI transfer helpers */
+
+static void qspi_fill_cmd(u8 *buf, u8 opcode, u32 addr)
 {
-	u32 quirks = 0;
-	int n;
-
-	for (n = 0; spi_hid_quirks[n].idVendor; n++)
-		if (spi_hid_quirks[n].idVendor == idVendor &&
-		    (spi_hid_quirks[n].idProduct == (__u16)HID_ANY_ID ||
-		     spi_hid_quirks[n].idProduct == idProduct))
-			quirks = spi_hid_quirks[n].quirks;
-
-	return quirks;
+	buf[0] = opcode;
+	buf[1] = (addr >> 16) & 0xFF;
+	buf[2] = (addr >> 8) & 0xFF;
+	buf[3] = addr & 0xFF;
 }
 
-static void spi_hid_populate_read_approvals(const struct spi_hid_conf *conf,
-					    u8 *header_buf, u8 *body_buf)
+static int qspi_read_sync(struct spi_hid *shid, u32 addr, void *buf, int len)
 {
-	header_buf[0] = conf->read_opcode;
-	put_unaligned_be24(conf->input_report_header_address, &header_buf[1]);
-	header_buf[4] = SPI_HID_READ_APPROVAL_CONSTANT;
+	struct spi_transfer xfer = {};
+	u8 *tx, *rx;
+	int ret;
 
-	body_buf[0] = conf->read_opcode;
-	put_unaligned_be24(conf->input_report_body_address, &body_buf[1]);
-	body_buf[4] = SPI_HID_READ_APPROVAL_CONSTANT;
-}
-
-static void spi_hid_parse_dev_desc(const struct hidspi_dev_descriptor *raw,
-				   struct spi_hid_device_descriptor *desc)
-{
-	desc->hid_version = le16_to_cpu(raw->bcd_ver);
-	desc->report_descriptor_length = le16_to_cpu(raw->rep_desc_len);
-	desc->max_input_length = le16_to_cpu(raw->max_input_len);
-	desc->max_output_length = le16_to_cpu(raw->max_output_len);
-
-	/* FIXME: multi-fragment not supported, field below not used */
-	desc->max_fragment_length = le16_to_cpu(raw->max_frag_len);
-
-	desc->vendor_id = le16_to_cpu(raw->vendor_id);
-	desc->product_id = le16_to_cpu(raw->product_id);
-	desc->version_id = le16_to_cpu(raw->version_id);
-	desc->no_output_report_ack = le16_to_cpu(raw->flags) & BIT(0);
-}
-
-static void spi_hid_populate_input_header(const u8 *buf,
-					  struct spi_hid_input_header *header)
-{
-	header->version            = buf[0] & 0xf;
-	header->report_length      = (get_unaligned_le16(&buf[1]) & 0x3fff) * 4;
-	header->last_fragment_flag = (buf[2] & 0x40) >> 6;
-	header->sync_const         = buf[3];
-}
-
-static void spi_hid_populate_input_body(const u8 *buf,
-					struct input_report_body_header *body)
-{
-	body->input_report_type = buf[0];
-	body->content_len = get_unaligned_le16(&buf[1]);
-	body->content_id = buf[3];
-}
-
-static void spi_hid_input_report_prepare(struct spi_hid_input_buf *buf,
-					 struct spi_hid_input_report *report)
-{
-	struct spi_hid_input_header header;
-	struct input_report_body_header body;
-
-	spi_hid_populate_input_header(buf->header, &header);
-	spi_hid_populate_input_body(buf->body, &body);
-	report->report_type = body.input_report_type;
-	report->content_length = body.content_len;
-	report->content_id = body.content_id;
-	report->content = buf->content;
-}
-
-static void spi_hid_populate_output_header(u8 *buf,
-					   const struct spi_hid_conf *conf,
-					   const struct spi_hid_output_report *report)
-{
-	buf[0] = conf->write_opcode;
-	put_unaligned_be24(conf->output_report_address, &buf[1]);
-	buf[4] = report->report_type;
-	put_unaligned_le16(report->content_length, &buf[5]);
-	buf[7] = report->content_id;
-}
-
-static int spi_hid_input_sync(struct spi_hid *shid, void *buf, u16 length,
-			      bool is_header)
-{
-	int error;
-
-	shid->input_transfer[0].tx_buf = is_header ?
-					 shid->read_approval_header :
-					 shid->read_approval_body;
-	shid->input_transfer[0].len = SPI_HID_READ_APPROVAL_LEN;
-
-	shid->input_transfer[1].rx_buf = buf;
-	shid->input_transfer[1].len = length;
-
-	spi_message_init_with_transfers(&shid->input_message,
-					shid->input_transfer, 2);
-
-	error = spi_sync(shid->spi, &shid->input_message);
-	if (error) {
-		dev_err(&shid->spi->dev, "Error starting sync transfer: %d.", error);
-		shid->bus_error_count++;
-		shid->bus_last_error = error;
-		return error;
+	tx = kzalloc(len, GFP_KERNEL);
+	rx = kzalloc(len, GFP_KERNEL);
+	if (!tx || !rx) {
+		kfree(tx);
+		kfree(rx);
+		return -ENOMEM;
 	}
 
-	return 0;
+	qspi_fill_cmd(tx, SPI_HID_QSPI_READ_OPCODE, addr);
+
+	xfer.tx_buf = tx;
+	xfer.rx_buf = rx;
+	xfer.len = len;
+	xfer.tx_nbits = 4;
+	xfer.rx_nbits = 4;
+
+	ret = spi_sync_transfer(shid->spi, &xfer, 1);
+	if (ret == 0)
+		memcpy(buf, rx, len);
+
+	kfree(tx);
+	kfree(rx);
+	return ret;
 }
 
-static int spi_hid_output(struct spi_hid *shid, const void *buf, u16 length)
+static int qspi_write_sync(struct spi_hid *shid, u32 addr,
+			    const void *data, int len)
 {
-	int error;
+	struct device *dev = &shid->spi->dev;
+	struct spi_transfer xfer = {};
+	int total = SPI_HID_QSPI_CMD_LEN + len;
+	u8 *tx;
+	int ret;
 
-	error = spi_write(shid->spi, buf, length);
+	tx = kzalloc(total, GFP_KERNEL);
+	if (!tx)
+		return -ENOMEM;
 
-	if (error) {
-		shid->bus_error_count++;
-		shid->bus_last_error = error;
-	}
+	qspi_fill_cmd(tx, SPI_HID_QSPI_WRITE_OPCODE, addr);
+	if (data && len > 0)
+		memcpy(tx + SPI_HID_QSPI_CMD_LEN, data, len);
 
-	return error;
+	xfer.tx_buf = tx;
+	xfer.rx_buf = NULL;
+	xfer.len = total;
+	xfer.tx_nbits = 4;
+	xfer.rx_nbits = 4;
+
+	ret = spi_sync_transfer(shid->spi, &xfer, 1);
+
+	kfree(tx);
+	return ret;
 }
 
-static const char *spi_hid_power_mode_string(enum hidspi_power_state power_state)
+static void spi_hid_parse_input_header(const u8 *buf,
+					struct spi_hid_input_header *hdr)
 {
-	switch (power_state) {
-	case HIDSPI_ON:
-		return "d0";
-	case HIDSPI_SLEEP:
-		return "d2";
-	case HIDSPI_OFF:
-		return "d3";
-	default:
-		return "unknown";
-	}
+	u32 raw = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+
+	hdr->sync_const = (raw >> 24) & 0xFF;
+	hdr->version = raw & 0x0F;
+	hdr->body_len = ((raw >> 8) & 0x3FFF) * 4;
+	hdr->last_frag = (raw >> 22) & 1;
 }
 
-static int spi_hid_suspend(struct spi_hid *shid)
+static void spi_hid_parse_body_header(const u8 *buf,
+				       struct spi_hid_body_header *bhdr)
 {
-	int error;
+	bhdr->report_type = buf[0];
+	bhdr->content_length = buf[1] | (buf[2] << 8);
+	bhdr->content_id = buf[3];
+}
+
+static int spi_hid_validate_header(struct spi_hid *shid,
+				    struct spi_hid_input_header *hdr)
+{
 	struct device *dev = &shid->spi->dev;
 
-	guard(mutex)(&shid->power_lock);
-	if (shid->power_state == HIDSPI_OFF)
+	if (hdr->sync_const != SPI_HID_INPUT_HEADER_SYNC_BYTE) {
+		dev_err(dev, "Bad sync: 0x%02x\n", hdr->sync_const);
+		return -EINVAL;
+	}
+
+	if (hdr->version != SPI_HID_INPUT_HEADER_VERSION) {
+		dev_err(dev, "Bad version: %d\n", hdr->version);
+		return -EINVAL;
+	}
+
+	if (hdr->body_len == 0)
 		return 0;
 
-	if (shid->hid) {
-		error = hid_driver_suspend(shid->hid, PMSG_SUSPEND);
-		if (error) {
-			dev_err(dev, "%s failed to suspend hid driver: %d",
-				__func__, error);
-			return error;
-		}
+	if (shid->desc.max_input_length != 0 &&
+	    hdr->body_len > shid->desc.max_input_length) {
+		dev_err(dev, "Body %u > max %u\n",
+			hdr->body_len, shid->desc.max_input_length);
+		return -EMSGSIZE;
 	}
 
-	disable_irq(shid->spi->irq);
-
-	clear_bit(SPI_HID_READY, &shid->flags);
-
-	if (!device_may_wakeup(dev)) {
-		set_bit(SPI_HID_RESET_PENDING, &shid->flags);
-
-		shid->ops->assert_reset(shid->ops);
-
-		error = shid->ops->power_down(shid->ops);
-		if (error) {
-			dev_err(dev, "%s: could not power down.", __func__);
-			shid->regulator_error_count++;
-			shid->regulator_last_error = error;
-			return error;
-		}
-
-		shid->power_state = HIDSPI_OFF;
-	}
 	return 0;
 }
 
-static int spi_hid_resume(struct spi_hid *shid)
+static void spi_hid_parse_dev_desc(struct spi_hid_device_desc_raw *raw,
+				    struct spi_hid_device_descriptor *desc)
 {
-	int error;
-	struct device *dev = &shid->spi->dev;
-
-	guard(mutex)(&shid->power_lock);
-	if (shid->power_state == HIDSPI_ON)
-		return 0;
-
-	enable_irq(shid->spi->irq);
-
-	if (!device_may_wakeup(dev)) {
-		shid->ops->assert_reset(shid->ops);
-
-		shid->ops->sleep_minimal_reset_delay(shid->ops);
-
-		error = shid->ops->power_up(shid->ops);
-		if (error) {
-			dev_err(dev, "%s: could not power up.", __func__);
-			shid->regulator_error_count++;
-			shid->regulator_last_error = error;
-			return error;
-		}
-		shid->power_state = HIDSPI_ON;
-
-		shid->ops->deassert_reset(shid->ops);
-	}
-
-	if (shid->hid) {
-		error = hid_driver_reset_resume(shid->hid);
-		if (error) {
-			dev_err(dev, "%s: failed to reset resume hid driver: %d.",
-				__func__, error);
-			return error;
-		}
-	}
-	return 0;
+	desc->hid_version = le16_to_cpu(raw->bcdVersion);
+	desc->report_descriptor_length = le16_to_cpu(raw->wReportDescLength);
+	desc->max_input_length = le16_to_cpu(raw->wMaxInputLength);
+	desc->max_output_length = le16_to_cpu(raw->wMaxOutputLength);
+	desc->max_fragment_length = le16_to_cpu(raw->wMaxFragmentLength);
+	desc->vendor_id = le16_to_cpu(raw->wVendorID);
+	desc->product_id = le16_to_cpu(raw->wProductID);
+	desc->version_id = le16_to_cpu(raw->wVersionID);
+	desc->flags = le16_to_cpu(raw->wFlags);
 }
 
-static void spi_hid_stop_hid(struct spi_hid *shid)
+static int spi_hid_send_output(struct spi_hid *shid,
+			       u8 report_type, u8 content_id,
+			       const u8 *content, int content_len)
 {
-	struct hid_device *hid = shid->hid;
+	u8 body[SPI_HID_BODY_HEADER_LEN + 512];
+	int body_len = SPI_HID_BODY_HEADER_LEN + content_len;
 
-	shid->hid = NULL;
-	clear_bit(SPI_HID_READY, &shid->flags);
-
-	if (hid)
-		hid_destroy_device(hid);
-}
-
-static void spi_hid_error(struct spi_hid *shid)
-{
-	struct device *dev = &shid->spi->dev;
-	int error;
-
-	guard(mutex)(&shid->power_lock);
-	if (shid->power_state == HIDSPI_OFF)
-		return;
-
-	if (shid->reset_attempts++ >= SPI_HID_MAX_RESET_ATTEMPTS) {
-		dev_err(dev, "unresponsive device, aborting.");
-		spi_hid_stop_hid(shid);
-		shid->ops->assert_reset(shid->ops);
-		error = shid->ops->power_down(shid->ops);
-		if (error) {
-			dev_err(dev, "failed to disable regulator.");
-			shid->regulator_error_count++;
-			shid->regulator_last_error = error;
-		}
-		return;
-	}
-
-	clear_bit(SPI_HID_READY, &shid->flags);
-	set_bit(SPI_HID_RESET_PENDING, &shid->flags);
-
-	shid->ops->assert_reset(shid->ops);
-
-	shid->power_state = HIDSPI_OFF;
-
-	/*
-	 * We want to cancel pending reset work as the device is being reset
-	 * to recover from an error. cancel_work_sync will put us in a deadlock
-	 * because this function is scheduled in 'reset_work' and we should
-	 * avoid waiting for itself.
-	 */
-	cancel_work(&shid->reset_work);
-
-	shid->ops->sleep_minimal_reset_delay(shid->ops);
-
-	shid->power_state = HIDSPI_ON;
-
-	shid->ops->deassert_reset(shid->ops);
-}
-
-static int spi_hid_send_output_report(struct spi_hid *shid,
-				      struct spi_hid_output_report *report)
-{
-	struct spi_hid_output_buf *buf = shid->output;
-	struct device *dev = &shid->spi->dev;
-	u16 report_length;
-	u16 padded_length;
-	u8 padding;
-	int error;
-
-	if (shid->quirks & SPI_HID_QUIRK_READ_DELAY)
-		usleep_range(2000, 2100);
-
-	guard(mutex)(&shid->output_lock);
-	if (report->content_length > shid->desc.max_output_length) {
-		dev_err(dev, "Output report too big, content_length 0x%x.",
-			report->content_length);
+	if (body_len > sizeof(body)) {
+		dev_err(&shid->spi->dev, "Output too large: %d\n", body_len);
 		return -E2BIG;
 	}
 
-	spi_hid_populate_output_header(buf->header, shid->conf, report);
+	body[0] = report_type;
+	body[1] = content_len & 0xFF;
+	body[2] = (content_len >> 8) & 0xFF;
+	body[3] = content_id;
+	if (content && content_len > 0)
+		memcpy(body + SPI_HID_BODY_HEADER_LEN, content, content_len);
 
-	if (report->content_length)
-		memcpy(&buf->content, report->content, report->content_length);
-
-	report_length = sizeof(buf->header) + report->content_length;
-	padded_length = round_up(report_length,	4);
-	padding = padded_length - report_length;
-	memset(&buf->content[report->content_length], 0, padding);
-
-	error = spi_hid_output(shid, buf, padded_length);
-	if (error)
-		dev_err(dev, "Failed output transfer: %d.", error);
-
-	return error;
+	return qspi_write_sync(shid, SPI_HID_OUTPUT_ADDR, body, body_len);
 }
 
-static const u32 spi_hid_get_timeout(struct spi_hid *shid)
+/* Caller must hold shid->lock. */
+static int spi_hid_sync_request_ms(struct spi_hid *shid,
+				    u8 report_type, u8 content_id,
+				    const u8 *content, int content_len,
+				    unsigned int timeout_ms)
 {
 	struct device *dev = &shid->spi->dev;
-	u32 timeout;
+	unsigned long timeout;
+	int ret;
 
-	timeout = READ_ONCE(shid->ops->response_timeout_ms);
+	reinit_completion(&shid->output_done);
 
-	if (timeout < SPI_HID_RESP_TIMEOUT || timeout > 10000) {
-		dev_dbg(dev, "Response timeout is out of range, using default %d",
-			SPI_HID_RESP_TIMEOUT);
-		timeout = SPI_HID_RESP_TIMEOUT;
+	ret = spi_hid_send_output(shid, report_type, content_id,
+				  content, content_len);
+	if (ret) {
+		dev_err(dev, "Failed to send output type %d: %d\n",
+			report_type, ret);
+		return ret;
 	}
 
-	return timeout;
-}
-
-static int spi_hid_sync_request(struct spi_hid *shid,
-				struct spi_hid_output_report *report)
-{
-	struct device *dev = &shid->spi->dev;
-	u32 timeout = SPI_HID_RESP_TIMEOUT;
-	int error;
-
-	error = spi_hid_send_output_report(shid, report);
-	if (error)
-		return error;
-
-	if (shid->quirks & SPI_HID_QUIRK_MODE_SWITCH)
-		timeout = spi_hid_get_timeout(shid);
-
-	error = wait_for_completion_interruptible_timeout(&shid->output_done,
-							  msecs_to_jiffies(timeout));
-	if (error == 0) {
-		dev_err(dev, "Response timed out.");
+	timeout = wait_for_completion_timeout(&shid->output_done,
+				msecs_to_jiffies(timeout_ms));
+	if (timeout == 0) {
+		dev_err(dev, "Response timeout for type %d (%ums)\n",
+			report_type, timeout_ms);
 		return -ETIMEDOUT;
 	}
 
 	return 0;
 }
 
-/*
- * Handle the reset response from the FW by sending a request for the device
- * descriptor.
- */
-static void spi_hid_reset_response(struct spi_hid *shid)
+static int spi_hid_sync_request(struct spi_hid *shid,
+				u8 report_type, u8 content_id,
+				const u8 *content, int content_len)
 {
-	struct device *dev = &shid->spi->dev;
-	struct spi_hid_output_report report = {
-		.report_type = DEVICE_DESCRIPTOR,
-		.content_length = 0x0,
-		.content_id = SPI_HID_OUTPUT_REPORT_CONTENT_ID_DESC_REQUEST,
-		.content = NULL,
-	};
-	int error;
-
-	if (test_bit(SPI_HID_READY, &shid->flags)) {
-		dev_err(dev, "Spontaneous FW reset!");
-		clear_bit(SPI_HID_READY, &shid->flags);
-		shid->dir_count++;
-	}
-
-	if (shid->power_state == HIDSPI_OFF)
-		return;
-
-	error = spi_hid_sync_request(shid, &report);
-	if (error) {
-		dev_WARN_ONCE(dev, true,
-			      "Failed to send device descriptor request: %d.", error);
-		set_bit(SPI_HID_ERROR, &shid->flags);
-		schedule_work(&shid->reset_work);
-	}
+	return spi_hid_sync_request_ms(shid, report_type, content_id,
+				       content, content_len,
+				       SPI_HID_RESPONSE_TIMEOUT_MS);
 }
 
-static int spi_hid_input_report_handler(struct spi_hid *shid,
-					struct spi_hid_input_buf *buf)
+static int spi_hid_power_down(struct spi_hid *shid)
 {
-	struct device *dev = &shid->spi->dev;
-	struct spi_hid_input_report r;
-	int error = 0;
-
-	if (!test_bit(SPI_HID_READY, &shid->flags) ||
-	    test_bit(SPI_HID_REFRESH_IN_PROGRESS, &shid->flags) || !shid->hid) {
-		dev_err(dev, "HID not ready");
-		return 0;
-	}
-
-	spi_hid_input_report_prepare(buf, &r);
-
-	error = hid_input_report(shid->hid, HID_INPUT_REPORT,
-				 r.content - 1, r.content_length + 1, 1);
-
-	if (error == -ENODEV || error == -EBUSY) {
-		dev_err(dev, "ignoring report --> %d.", error);
-		return 0;
-	} else if (error) {
-		dev_err(dev, "Bad input report: %d.", error);
-	}
-
-	return error;
-}
-
-static void spi_hid_response_handler(struct spi_hid *shid,
-				     struct input_report_body_header *body)
-{
-	shid->response_length = body->content_len;
-	/* completion_done returns 0 if there are waiters, otherwise 1 */
-	if (completion_done(&shid->output_done)) {
-		dev_err(&shid->spi->dev, "Unexpected response report.");
-	} else {
-		if (body->input_report_type == REPORT_DESCRIPTOR_RESPONSE ||
-		    body->input_report_type == GET_FEATURE_RESPONSE) {
-			memcpy(shid->response->body, shid->input->body,
-			       sizeof(shid->input->body));
-			memcpy(shid->response->content, shid->input->content,
-			       body->content_len);
-		}
-		complete(&shid->output_done);
-	}
-}
-
-/*
- * This function returns the length of the report descriptor, or a negative
- * error code if something went wrong.
- */
-static int spi_hid_report_descriptor_request(struct spi_hid *shid)
-{
-	struct device *dev = &shid->spi->dev;
-	struct spi_hid_output_report report = {
-		.report_type = REPORT_DESCRIPTOR,
-		.content_length = 0,
-		.content_id = SPI_HID_OUTPUT_REPORT_CONTENT_ID_DESC_REQUEST,
-		.content = NULL,
-	};
 	int ret;
 
-	ret =  spi_hid_sync_request(shid, &report);
+	if (!shid->powered)
+		return 0;
+
+	if (shid->pinctrl_sleep)
+		pinctrl_select_state(shid->pinctrl, shid->pinctrl_sleep);
+
+	if (shid->supply) {
+		ret = regulator_disable(shid->supply);
+		if (ret) {
+			dev_err(&shid->spi->dev, "regulator disable failed\n");
+			return ret;
+		}
+	}
+
+	shid->powered = false;
+	return 0;
+}
+
+static int spi_hid_power_up(struct spi_hid *shid)
+{
+	int ret;
+
+	if (shid->powered)
+		return 0;
+
+	shid->powered = true;
+
+	if (shid->supply) {
+		ret = regulator_enable(shid->supply);
+		if (ret) {
+			shid->powered = false;
+			return ret;
+		}
+	}
+
+	usleep_range(5000, 6000);
+	return 0;
+}
+
+static struct hid_device *spi_hid_disconnect_hid(struct spi_hid *shid)
+{
+	struct hid_device *hid = shid->hid;
+
+	shid->hid = NULL;
+	return hid;
+}
+
+static void spi_hid_stop_hid(struct spi_hid *shid)
+{
+	struct hid_device *hid;
+
+	hid = spi_hid_disconnect_hid(shid);
+	if (hid) {
+		cancel_work_sync(&shid->create_device_work);
+		cancel_work_sync(&shid->refresh_device_work);
+		hid_destroy_device(hid);
+	}
+}
+
+static int spi_hid_error_handler(struct spi_hid *shid)
+{
+	struct device *dev = &shid->spi->dev;
+	int ret;
+
+	if (shid->power_state == SPI_HID_POWER_MODE_OFF)
+		return 0;
+
+	dev_err(dev, "Error handler (attempt %d)\n", shid->attempts);
+
+	if (shid->attempts++ >= SPI_HID_MAX_RESET_ATTEMPTS) {
+		dev_err(dev, "Unresponsive device, aborting\n");
+		spi_hid_stop_hid(shid);
+		spi_hid_power_down(shid);
+		return -ESHUTDOWN;
+	}
+
+	shid->ready = false;
+
+	ret = pinctrl_select_state(shid->pinctrl, shid->pinctrl_reset);
 	if (ret) {
-		dev_err(dev,
-			"Expected report descriptor not received: %d.", ret);
-		set_bit(SPI_HID_ERROR, &shid->flags);
-		schedule_work(&shid->reset_work);
+		dev_err(dev, "Reset assert failed\n");
+		return ret;
+	}
+	shid->power_state = SPI_HID_POWER_MODE_OFF;
+
+	msleep(SPI_HID_RESET_ASSERT_MS);
+
+	shid->power_state = SPI_HID_POWER_MODE_ACTIVE;
+	ret = pinctrl_select_state(shid->pinctrl, shid->pinctrl_active);
+	if (ret) {
+		dev_err(dev, "Reset deassert failed\n");
 		return ret;
 	}
 
-	ret = shid->response_length;
-	if (ret != shid->desc.report_descriptor_length) {
-		ret = min_t(unsigned int, ret, shid->desc.report_descriptor_length);
-		dev_err(dev, "Received report descriptor length doesn't match device descriptor field, using min of the two: %d.",
-			ret);
-	}
+	msleep(SPI_HID_POST_DIR_DELAY_MS);
+
+	return 0;
+}
+
+static int spi_hid_input_report_handler(struct spi_hid *shid,
+					 const u8 *body, int body_len)
+{
+	struct device *dev = &shid->spi->dev;
+	struct spi_hid_body_header bhdr;
+	int ret;
+
+	if (!shid->ready || !shid->hid)
+		return 0;
+
+	spi_hid_parse_body_header(body, &bhdr);
+
+	ret = hid_input_report(shid->hid, HID_INPUT_REPORT,
+			       (u8 *)(body + 3),
+			       bhdr.content_length + 1, 1);
+
+	if (ret == -ENODEV || ret == -EBUSY)
+		return 0;
 
 	return ret;
+}
+
+static int spi_hid_process_input_report(struct spi_hid *shid,
+					 const u8 *body, int body_len)
+{
+	struct device *dev = &shid->spi->dev;
+	struct spi_hid_body_header bhdr;
+	struct spi_hid_device_desc_raw *raw;
+
+	if (body_len < SPI_HID_BODY_HEADER_LEN) {
+		dev_err(dev, "Body too short: %d\n", body_len);
+		return -EINVAL;
+	}
+
+	spi_hid_parse_body_header(body, &bhdr);
+
+	switch (bhdr.report_type) {
+	case SPI_HID_REPORT_TYPE_DATA:
+		return spi_hid_input_report_handler(shid, body, body_len);
+
+	case SPI_HID_REPORT_TYPE_RESET_RESP:
+		shid->resp_type = SPI_HID_REPORT_TYPE_RESET_RESP;
+		shid->resp_len = 0;
+		if (!completion_done(&shid->output_done)) {
+			complete(&shid->output_done);
+		} else {
+			if (!shid->ready)
+				schedule_work(&shid->reset_work);
+			else
+				schedule_work(&shid->refresh_device_work);
+		}
+		return 0;
+
+	case SPI_HID_REPORT_TYPE_DEVICE_DESC:
+		shid->attempts = 0;
+		if (body_len >= SPI_HID_BODY_HEADER_LEN +
+				sizeof(struct spi_hid_device_desc_raw)) {
+			raw = (struct spi_hid_device_desc_raw *)
+				(body + SPI_HID_BODY_HEADER_LEN);
+			spi_hid_parse_dev_desc(raw, &shid->desc);
+		}
+		if (shid->resp_buf && body_len <= SPI_HID_MAX_INPUT_LEN) {
+			memcpy(shid->resp_buf, body, body_len);
+			shid->resp_len = body_len;
+			shid->resp_type = bhdr.report_type;
+		}
+		if (!completion_done(&shid->output_done))
+			complete(&shid->output_done);
+		else if (!shid->hid)
+			schedule_work(&shid->create_device_work);
+		else
+			schedule_work(&shid->refresh_device_work);
+		return 0;
+
+	case SPI_HID_REPORT_TYPE_COMMAND_RESP:
+	case SPI_HID_REPORT_TYPE_GET_FEATURE_RESP:
+	case SPI_HID_REPORT_TYPE_REPORT_DESC:
+	case SPI_HID_REPORT_TYPE_SET_FEATURE_RESP:
+	case SPI_HID_REPORT_TYPE_OUTPUT_REPORT_RESP:
+	case SPI_HID_REPORT_TYPE_GET_INPUT_RESP:
+		if (shid->resp_buf && body_len <= SPI_HID_MAX_INPUT_LEN) {
+			memcpy(shid->resp_buf, body, body_len);
+			shid->resp_len = body_len;
+			shid->resp_type = bhdr.report_type;
+		}
+		if (!completion_done(&shid->output_done))
+			complete(&shid->output_done);
+		return 0;
+
+	default:
+		dev_err(dev, "Unknown report type: 0x%x (body_len=%d raw: %*ph)\n",
+			bhdr.report_type, body_len,
+			min(body_len, 16), body);
+		return -EINVAL;
+	}
+}
+
+static irqreturn_t spi_hid_irq_thread(int irq, void *_shid)
+{
+	struct spi_hid *shid = _shid;
+	struct device *dev = &shid->spi->dev;
+	struct spi_hid_input_header hdr;
+	struct spi_transfer xfer = {};
+	int ret;
+
+	if (!shid->powered)
+		return IRQ_HANDLED;
+
+	xfer.tx_buf = shid->irq_hdr_tx;
+	xfer.rx_buf = shid->irq_hdr_rx;
+	xfer.len = SPI_HID_INPUT_HEADER_LEN;
+	xfer.tx_nbits = 4;
+	xfer.rx_nbits = 4;
+
+	ret = spi_sync_transfer(shid->spi, &xfer, 1);
+	if (ret) {
+		shid->bus_error_count++;
+		shid->bus_last_error = ret;
+		if (shid->bus_error_count <= 5)
+			dev_err(dev, "Header read failed: %d\n", ret);
+		if (shid->bus_error_count == 100) {
+			dev_err(dev, "Too many read errors, disabling IRQ\n");
+			disable_irq_nosync(shid->spi->irq);
+		}
+		return IRQ_HANDLED;
+	}
+
+	spi_hid_parse_input_header(shid->irq_hdr_rx, &hdr);
+
+	ret = spi_hid_validate_header(shid, &hdr);
+	if (ret) {
+		shid->bus_error_count++;
+		shid->bus_last_error = ret;
+		if (shid->bus_error_count <= 5 ||
+		    shid->bus_error_count % 1000 == 0)
+			dev_err(dev, "Invalid header (%u errors): %*ph\n",
+				shid->bus_error_count,
+				SPI_HID_INPUT_HEADER_LEN, shid->irq_hdr_rx);
+		if (shid->bus_error_count == 100) {
+			dev_err(dev, "Too many errors, disabling IRQ\n");
+			disable_irq_nosync(shid->spi->irq);
+		}
+		return IRQ_HANDLED;
+	}
+	shid->bus_error_count = 0;
+
+	if (hdr.body_len == 0)
+		return IRQ_HANDLED;
+
+	if (hdr.body_len > SPI_HID_MAX_INPUT_LEN) {
+		dev_err(dev, "Body too large: %u\n", hdr.body_len);
+		return IRQ_HANDLED;
+	}
+
+	memset(&xfer, 0, sizeof(xfer));
+	xfer.tx_buf = shid->irq_bdy_tx;
+	xfer.rx_buf = shid->irq_bdy_rx;
+	xfer.len = hdr.body_len;
+	xfer.tx_nbits = 4;
+	xfer.rx_nbits = 4;
+
+	ret = spi_sync_transfer(shid->spi, &xfer, 1);
+	if (ret) {
+		dev_err(dev, "Body read failed: %d\n", ret);
+		shid->bus_error_count++;
+		shid->bus_last_error = ret;
+		return IRQ_HANDLED;
+	}
+
+	spi_hid_process_input_report(shid, shid->irq_bdy_rx, hdr.body_len);
+
+	return IRQ_HANDLED;
+}
+
+static int spi_hid_create_device(struct spi_hid *shid);
+
+static void spi_hid_reset_work(struct work_struct *work)
+{
+	struct spi_hid *shid = container_of(work, struct spi_hid, reset_work);
+	struct device *dev = &shid->spi->dev;
+	int ret, attempt;
+
+	if (shid->ready)
+		shid->dir_count++;
+
+	flush_work(&shid->create_device_work);
+
+	if (shid->power_state == SPI_HID_POWER_MODE_OFF)
+		return;
+
+	flush_work(&shid->refresh_device_work);
+
+	mutex_lock(&shid->lock);
+
+	for (attempt = 0; attempt < SPI_HID_MAX_RESET_ATTEMPTS; attempt++) {
+		int dd_try, rd_try, rd_len;
+
+		if (attempt > 0) {
+			pinctrl_select_state(shid->pinctrl, shid->pinctrl_reset);
+			msleep(SPI_HID_RESET_ASSERT_MS);
+			pinctrl_select_state(shid->pinctrl, shid->pinctrl_active);
+			msleep(2000);
+		}
+
+		for (dd_try = 0; dd_try < SPI_HID_MAX_INIT_RETRIES; dd_try++) {
+			ret = spi_hid_sync_request(shid,
+						   SPI_HID_OUT_DEVICE_DESC,
+						   0, NULL, 0);
+			if (ret) {
+				dev_err(dev, "GET_DD failed: %d\n", ret);
+				break;
+			}
+			if (shid->resp_type == SPI_HID_REPORT_TYPE_DEVICE_DESC)
+				break;
+			if (shid->resp_type == SPI_HID_REPORT_TYPE_RESET_RESP) {
+				msleep(SPI_HID_POST_DIR_DELAY_MS);
+				continue;
+			}
+			dev_err(dev, "GET_DD: unexpected type %d\n",
+				shid->resp_type);
+			msleep(SPI_HID_POST_DIR_DELAY_MS);
+		}
+		if (dd_try >= SPI_HID_MAX_INIT_RETRIES || ret) {
+			dev_err(dev, "GET_DD failed, restarting\n");
+			continue;
+		}
+
+		for (rd_try = 0; rd_try < SPI_HID_MAX_INIT_RETRIES; rd_try++) {
+			ret = spi_hid_sync_request(shid,
+						   SPI_HID_OUT_REPORT_DESC,
+						   0, NULL, 0);
+			if (ret) {
+				dev_err(dev, "GET_RD failed: %d\n", ret);
+				break;
+			}
+			if (shid->resp_type == SPI_HID_REPORT_TYPE_REPORT_DESC)
+				break;
+			if (shid->resp_type == SPI_HID_REPORT_TYPE_RESET_RESP) {
+				msleep(SPI_HID_POST_DIR_DELAY_MS);
+				continue;
+			}
+			dev_err(dev, "GET_RD: unexpected type %d\n",
+				shid->resp_type);
+			msleep(SPI_HID_POST_DIR_DELAY_MS);
+		}
+		if (rd_try >= SPI_HID_MAX_INIT_RETRIES || ret) {
+			dev_err(dev, "GET_RD failed, restarting\n");
+			continue;
+		}
+
+		rd_len = shid->resp_len - SPI_HID_BODY_HEADER_LEN;
+		if (rd_len <= 0 || rd_len > 2048) {
+			dev_err(dev, "GET_RD: bad length %d\n", rd_len);
+			continue;
+		}
+		memcpy(shid->rd_buf,
+		       shid->resp_buf + SPI_HID_BODY_HEADER_LEN, rd_len);
+		shid->rd_len = rd_len;
+
+		goto success;
+	}
+
+	dev_err(dev, "Init failed after %d reset cycles\n", attempt);
+	mutex_unlock(&shid->lock);
+	spi_hid_error_handler(shid);
+	return;
+
+success:
+	mutex_unlock(&shid->lock);
+
+	if (!shid->hid)
+		spi_hid_create_device(shid);
 }
 
 static int spi_hid_create_device(struct spi_hid *shid)
 {
 	struct hid_device *hid;
 	struct device *dev = &shid->spi->dev;
-	int error;
+	int ret;
 
 	hid = hid_allocate_device();
-	error = PTR_ERR_OR_ZERO(hid);
-	if (error) {
-		dev_err(dev, "Failed to allocate hid device: %d.", error);
-		return error;
+	if (IS_ERR(hid)) {
+		dev_err(dev, "Failed to allocate hid device: %ld\n",
+			PTR_ERR(hid));
+		return PTR_ERR(hid);
 	}
 
 	hid->driver_data = shid->spi;
@@ -621,431 +624,64 @@ static int spi_hid_create_device(struct spi_hid *shid)
 	hid->vendor = shid->desc.vendor_id;
 	hid->product = shid->desc.product_id;
 
-	shid->quirks = spi_hid_lookup_quirk(hid->vendor, hid->product);
-
-	snprintf(hid->name, sizeof(hid->name), "spi %04X:%04X",
+	snprintf(hid->name, sizeof(hid->name), "spi %04hX:%04hX",
 		 hid->vendor, hid->product);
 	strscpy(hid->phys, dev_name(&shid->spi->dev), sizeof(hid->phys));
 
 	shid->hid = hid;
 
-	error = hid_add_device(hid);
-	if (error) {
-		dev_err(dev, "Failed to add hid device: %d.", error);
-		/*
-		 * We likely got here because report descriptor request timed
-		 * out. Let's disconnect and destroy the hid_device structure.
-		 */
-		spi_hid_stop_hid(shid);
-		return error;
+	ret = hid_add_device(hid);
+	if (ret) {
+		dev_err(dev, "Failed to add hid device: %d\n", ret);
+		hid = spi_hid_disconnect_hid(shid);
+		if (hid)
+			hid_destroy_device(hid);
+		return ret;
 	}
 
 	return 0;
 }
 
-static void spi_hid_refresh_device(struct spi_hid *shid)
-{
-	struct device *dev = &shid->spi->dev;
-	u32 new_crc32 = 0;
-	int error = 0;
-
-	error = spi_hid_report_descriptor_request(shid);
-	if (error < 0) {
-		dev_err(dev,
-			"%s: failed report descriptor request: %d",
-			__func__, error);
-		return;
-	}
-	new_crc32 = crc32_le(0, (unsigned char const *)shid->response->content,
-			     (size_t)error);
-
-	/* Same report descriptor, so no need to create a new hid device. */
-	if (new_crc32 == shid->report_descriptor_crc32) {
-		set_bit(SPI_HID_READY, &shid->flags);
-		return;
-	}
-
-	shid->report_descriptor_crc32 = new_crc32;
-
-	set_bit(SPI_HID_REFRESH_IN_PROGRESS, &shid->flags);
-
-	spi_hid_stop_hid(shid);
-
-	error = spi_hid_create_device(shid);
-	if (error) {
-		dev_err(dev, "%s: Failed to create hid device: %d.", __func__, error);
-		return;
-	}
-
-	clear_bit(SPI_HID_REFRESH_IN_PROGRESS, &shid->flags);
-}
-
-static void spi_hid_reset_work(struct work_struct *work)
+static void spi_hid_create_device_work(struct work_struct *work)
 {
 	struct spi_hid *shid =
-		container_of(work, struct spi_hid, reset_work);
+		container_of(work, struct spi_hid, create_device_work);
 	struct device *dev = &shid->spi->dev;
-	int error = 0;
+	int ret;
 
-	if (test_and_clear_bit(SPI_HID_RESET_RESPONSE, &shid->flags)) {
-		spi_hid_reset_response(shid);
+	if (shid->desc.hid_version != SPI_HID_SUPPORTED_VERSION) {
+		dev_err(dev, "Unsupported version 0x%04x (expected 0x%04x)\n",
+			shid->desc.hid_version, SPI_HID_SUPPORTED_VERSION);
+		spi_hid_error_handler(shid);
 		return;
 	}
 
-	if (test_and_clear_bit(SPI_HID_CREATE_DEVICE, &shid->flags)) {
-		guard(mutex)(&shid->power_lock);
-		if (shid->power_state == HIDSPI_OFF) {
-			dev_err(dev, "%s: Powered off, returning", __func__);
-			return;
-		}
-
-		if (!shid->hid) {
-			error = spi_hid_create_device(shid);
-			if (error) {
-				dev_err(dev, "%s: Failed to create hid device: %d.",
-					__func__, error);
-				return;
-			}
-		} else {
-			spi_hid_refresh_device(shid);
-		}
-
+	ret = spi_hid_create_device(shid);
+	if (ret) {
+		dev_err(dev, "Failed to create HID device: %d\n", ret);
 		return;
 	}
 
-	if (test_and_clear_bit(SPI_HID_ERROR, &shid->flags)) {
-		spi_hid_error(shid);
-		return;
-	}
+	shid->attempts = 0;
 }
 
-static int spi_hid_process_input_report(struct spi_hid *shid,
-					struct spi_hid_input_buf *buf)
+static void spi_hid_refresh_device_work(struct work_struct *work)
 {
-	struct spi_hid_input_header header;
-	struct input_report_body_header body;
-	struct device *dev = &shid->spi->dev;
-	struct hidspi_dev_descriptor *raw;
+	struct spi_hid *shid =
+		container_of(work, struct spi_hid, refresh_device_work);
 
-	spi_hid_populate_input_header(buf->header, &header);
-	spi_hid_populate_input_body(buf->body, &body);
-
-	if (body.content_len > header.report_length) {
-		dev_err(dev, "Bad body length %d > %d.", body.content_len,
-			header.report_length);
-		return -EPROTO;
-	}
-
-	switch (body.input_report_type) {
-	case DATA:
-		return spi_hid_input_report_handler(shid, buf);
-	case RESET_RESPONSE:
-		clear_bit(SPI_HID_RESET_PENDING, &shid->flags);
-		set_bit(SPI_HID_RESET_RESPONSE, &shid->flags);
-		schedule_work(&shid->reset_work);
-		break;
-	case DEVICE_DESCRIPTOR_RESPONSE:
-		/* Mark the completion done to avoid timeout */
-		spi_hid_response_handler(shid, &body);
-
-		/* Reset attempts at every device descriptor fetch */
-		shid->reset_attempts = 0;
-		raw = (struct hidspi_dev_descriptor *)buf->content;
-
-		/* Validate device descriptor length before parsing */
-		if (body.content_len != HIDSPI_DEVICE_DESCRIPTOR_SIZE) {
-			dev_err(dev, "Invalid content length %d, expected %lu.",
-				body.content_len,
-				HIDSPI_DEVICE_DESCRIPTOR_SIZE);
-			return -EPROTO;
-		}
-
-		if (le16_to_cpu(raw->dev_desc_len) !=
-		    HIDSPI_DEVICE_DESCRIPTOR_SIZE) {
-			dev_err(dev,
-				"Invalid wDeviceDescLength %d, expected %lu.",
-				raw->dev_desc_len,
-				HIDSPI_DEVICE_DESCRIPTOR_SIZE);
-			return -EPROTO;
-		}
-
-		spi_hid_parse_dev_desc(raw, &shid->desc);
-
-		if (shid->desc.hid_version != SPI_HID_SUPPORTED_VERSION) {
-			dev_err(dev,
-				"Unsupported device descriptor version %4x.",
-				shid->desc.hid_version);
-			return -EPROTONOSUPPORT;
-		}
-
-		set_bit(SPI_HID_CREATE_DEVICE, &shid->flags);
-		schedule_work(&shid->reset_work);
-
-		break;
-	case OUTPUT_REPORT_RESPONSE:
-		if (shid->desc.no_output_report_ack) {
-			dev_err(dev, "Unexpected output report response.");
-			break;
-		}
-		fallthrough;
-	case GET_FEATURE_RESPONSE:
-	case SET_FEATURE_RESPONSE:
-	case REPORT_DESCRIPTOR_RESPONSE:
-		spi_hid_response_handler(shid, &body);
-		break;
-	/*
-	 * FIXME: sending GET_INPUT and COMMAND reports not supported, thus
-	 * throw away responses to those, they should never come.
-	 */
-	case GET_INPUT_REPORT_RESPONSE:
-	case COMMAND_RESPONSE:
-		dev_err(dev, "Not a supported report type: 0x%x.",
-			body.input_report_type);
-		break;
-	default:
-		dev_err(dev, "Unknown input report: 0x%x.", body.input_report_type);
-		return -EPROTO;
-	}
-
-	return 0;
+	shid->ready = true;
 }
-
-static int spi_hid_bus_validate_header(struct spi_hid *shid,
-				       struct spi_hid_input_header *header)
-{
-	struct device *dev = &shid->spi->dev;
-
-	if (header->version != SPI_HID_INPUT_HEADER_VERSION) {
-		dev_err(dev, "Unknown input report version (v 0x%x).",
-			header->version);
-		return -EINVAL;
-	}
-
-	if (shid->desc.max_input_length != 0 &&
-	    header->report_length > shid->desc.max_input_length) {
-		dev_err(dev, "Input report body size %u > max expected of %u.",
-			header->report_length, shid->desc.max_input_length);
-		return -EMSGSIZE;
-	}
-
-	if (header->last_fragment_flag != 1) {
-		dev_err(dev, "Multi-fragment reports not supported.");
-		return -EOPNOTSUPP;
-	}
-
-	if (header->sync_const != SPI_HID_INPUT_HEADER_SYNC_BYTE) {
-		dev_err(dev, "Invalid input report sync constant (0x%x).",
-			header->sync_const);
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int spi_hid_get_request(struct spi_hid *shid, u8 content_id)
-{
-	struct device *dev = &shid->spi->dev;
-	struct spi_hid_output_report report = {
-		.report_type = GET_FEATURE,
-		.content_length = 0,
-		.content_id = content_id,
-		.content = NULL,
-	};
-	int error;
-
-	error = spi_hid_sync_request(shid, &report);
-	if (error) {
-		dev_err(dev,
-			"Expected get request response not received! Error %d.",
-			error);
-		set_bit(SPI_HID_ERROR, &shid->flags);
-		schedule_work(&shid->reset_work);
-		return error;
-	}
-
-	return 0;
-}
-
-static int spi_hid_set_request(struct spi_hid *shid, u8 *arg_buf, u16 arg_len,
-			       u8 content_id)
-{
-	struct spi_hid_output_report report = {
-		.report_type = SET_FEATURE,
-		.content_length = arg_len,
-		.content_id = content_id,
-		.content = arg_buf,
-	};
-
-	return spi_hid_sync_request(shid, &report);
-}
-
-static irqreturn_t spi_hid_dev_irq(int irq, void *_shid)
-{
-	struct spi_hid *shid = _shid;
-	struct device *dev = &shid->spi->dev;
-	struct spi_hid_input_header header;
-	int error = 0;
-
-	error = spi_hid_input_sync(shid, shid->input->header,
-				   sizeof(shid->input->header), true);
-	if (error) {
-		dev_err(dev, "Failed to transfer header: %d.", error);
-		goto err;
-	}
-
-	if (shid->power_state == HIDSPI_OFF) {
-		dev_warn(dev, "Device is off after header was received.");
-		goto out;
-	}
-
-	if (shid->quirks & SPI_HID_QUIRK_MODE_SWITCH) {
-		/*
-		 * Update reset_pending on mode transitions inferred from
-		 * response timeout (entering/exiting a mode).
-		 */
-		u32 timeout = spi_hid_get_timeout(shid);
-		bool mode_enabled = timeout > SPI_HID_RESP_TIMEOUT;
-
-		if (mode_enabled != shid->prev_mode_enabled) {
-			if (mode_enabled)
-				set_bit(SPI_HID_RESET_PENDING, &shid->flags);
-			else
-				clear_bit(SPI_HID_RESET_PENDING, &shid->flags);
-		}
-
-		shid->prev_mode_enabled = mode_enabled;
-	}
-
-	if (shid->input_message.status < 0) {
-		dev_warn(dev, "Error reading header: %d.",
-			 shid->input_message.status);
-		shid->bus_error_count++;
-		shid->bus_last_error = shid->input_message.status;
-		goto err;
-	}
-
-	spi_hid_populate_input_header(shid->input->header, &header);
-
-	error = spi_hid_bus_validate_header(shid, &header);
-	if (error) {
-		if (!test_bit(SPI_HID_RESET_PENDING, &shid->flags)) {
-			dev_err(dev, "Failed to validate header: %d.", error);
-			print_hex_dump(KERN_ERR, "spi_hid: header buffer: ",
-				       DUMP_PREFIX_NONE, 16, 1, shid->input->header,
-				       sizeof(shid->input->header), false);
-			shid->bus_error_count++;
-			shid->bus_last_error = error;
-			goto err;
-		}
-		goto out;
-	}
-
-	error = spi_hid_input_sync(shid, shid->input->body, header.report_length,
-				   false);
-	if (error) {
-		dev_err(dev, "Failed to transfer body: %d.", error);
-		goto err;
-	}
-
-	if (shid->power_state == HIDSPI_OFF) {
-		dev_warn(dev, "Device is off after body was received.");
-		goto out;
-	}
-
-	if (shid->input_message.status < 0) {
-		dev_warn(dev, "Error reading body: %d.",
-			 shid->input_message.status);
-		shid->bus_error_count++;
-		shid->bus_last_error = shid->input_message.status;
-		goto err;
-	}
-
-	error = spi_hid_process_input_report(shid, shid->input);
-	if (error) {
-		dev_err(dev, "Failed to process input report: %d.", error);
-		goto err;
-	}
-
-out:
-	return IRQ_HANDLED;
-
-err:
-	set_bit(SPI_HID_ERROR, &shid->flags);
-	schedule_work(&shid->reset_work);
-	return IRQ_HANDLED;
-}
-
-static int spi_hid_alloc_buffers(struct spi_hid *shid, size_t report_size)
-{
-	struct device *dev = &shid->spi->dev;
-	int inbufsize = sizeof(shid->input->header) + sizeof(shid->input->body) + report_size;
-	int outbufsize = sizeof(shid->output->header) + report_size;
-
-	// devm_krealloc with __GFP_ZERO ensures the new memory is initialized
-	shid->output = devm_krealloc(dev, shid->output, outbufsize, GFP_KERNEL | __GFP_ZERO);
-	shid->input = devm_krealloc(dev, shid->input, inbufsize, GFP_KERNEL | __GFP_ZERO);
-	shid->response = devm_krealloc(dev, shid->response, inbufsize, GFP_KERNEL | __GFP_ZERO);
-
-	if (!shid->output || !shid->input || !shid->response)
-		return -ENOMEM;
-
-	shid->bufsize = report_size;
-
-	return 0;
-}
-
-static int spi_hid_get_report_length(struct hid_report *report)
-{
-	return ((report->size - 1) >> 3) + 1 +
-		report->device->report_enum[report->type].numbered + 2;
-}
-
-/*
- * Traverse the supplied list of reports and find the longest
- */
-static void spi_hid_find_max_report(struct hid_device *hid, u32 type,
-				    u16 *max)
-{
-	struct hid_report *report;
-	u16 size;
-
-	/*
-	 * We should not rely on wMaxInputLength, as some devices may set it to
-	 * a wrong length.
-	 */
-	list_for_each_entry(report, &hid->report_enum[type].report_list, list) {
-		size = spi_hid_get_report_length(report);
-		if (*max < size)
-			*max = size;
-	}
-}
-
-/* hid_ll_driver interface functions */
 
 static int spi_hid_ll_start(struct hid_device *hid)
 {
 	struct spi_device *spi = hid->driver_data;
 	struct spi_hid *shid = spi_get_drvdata(spi);
-	int error = 0;
-	u16 bufsize = 0;
 
-	spi_hid_find_max_report(hid, HID_INPUT_REPORT, &bufsize);
-	spi_hid_find_max_report(hid, HID_OUTPUT_REPORT, &bufsize);
-	spi_hid_find_max_report(hid, HID_FEATURE_REPORT, &bufsize);
-
-	if (bufsize < HID_MIN_BUFFER_SIZE) {
-		dev_err(&spi->dev,
-			"HID_MIN_BUFFER_SIZE > max_input_length (%d).",
-			bufsize);
+	if (shid->desc.max_input_length < HID_MIN_BUFFER_SIZE) {
+		dev_err(&spi->dev, "max_input_length %d < HID_MIN_BUFFER_SIZE\n",
+			shid->desc.max_input_length);
 		return -EINVAL;
-	}
-
-	if (bufsize > shid->bufsize) {
-		guard(disable_irq)(&shid->spi->irq);
-
-		error = spi_hid_alloc_buffers(shid, bufsize);
-		if (error)
-			return error;
 	}
 
 	return 0;
@@ -1058,33 +694,22 @@ static void spi_hid_ll_stop(struct hid_device *hid)
 
 static int spi_hid_ll_open(struct hid_device *hid)
 {
-	struct spi_device *spi = hid->driver_data;
-	struct spi_hid *shid = spi_get_drvdata(spi);
-
-	set_bit(SPI_HID_READY, &shid->flags);
 	return 0;
 }
 
 static void spi_hid_ll_close(struct hid_device *hid)
 {
-	struct spi_device *spi = hid->driver_data;
-	struct spi_hid *shid = spi_get_drvdata(spi);
-
-	clear_bit(SPI_HID_READY, &shid->flags);
-	shid->reset_attempts = 0;
 }
 
 static int spi_hid_ll_power(struct hid_device *hid, int level)
 {
 	struct spi_device *spi = hid->driver_data;
 	struct spi_hid *shid = spi_get_drvdata(spi);
-	int error = 0;
 
-	guard(mutex)(&shid->output_lock);
 	if (!shid->hid)
-		error = -ENODEV;
+		return -ENODEV;
 
-	return error;
+	return 0;
 }
 
 static int spi_hid_ll_parse(struct hid_device *hid)
@@ -1092,30 +717,20 @@ static int spi_hid_ll_parse(struct hid_device *hid)
 	struct spi_device *spi = hid->driver_data;
 	struct spi_hid *shid = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	int error, len;
+	int ret;
 
-	len = spi_hid_report_descriptor_request(shid);
-	if (len < 0) {
-		dev_err(dev, "Report descriptor request failed, %d.", len);
-		return len;
+	if (!shid->rd_buf || shid->rd_len <= 0) {
+		dev_err(dev, "No report descriptor available\n");
+		return -ENODATA;
 	}
 
-	/*
-	 * FIXME: below call returning 0 doesn't mean that the report descriptor
-	 * is good. We might be caching a crc32 of a corrupted r. d. or who
-	 * knows what the FW sent. Need to have a feedback loop about r. d.
-	 * being ok and only then cache it.
-	 */
-	error = hid_parse_report(hid, (u8 *)shid->response->content, len);
-	if (error) {
-		dev_err(dev, "failed parsing report: %d.", error);
-		return error;
-	}
-	shid->report_descriptor_crc32 = crc32_le(0,
-						 (unsigned char const *)shid->response->content,
-						 len);
+	ret = hid_parse_report(hid, shid->rd_buf, shid->rd_len);
+	if (ret)
+		dev_err(dev, "hid_parse_report failed: %d\n", ret);
+	else
+		shid->ready = true;
 
-	return 0;
+	return ret;
 }
 
 static int spi_hid_ll_raw_request(struct hid_device *hid,
@@ -1125,74 +740,100 @@ static int spi_hid_ll_raw_request(struct hid_device *hid,
 	struct spi_device *spi = hid->driver_data;
 	struct spi_hid *shid = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	int ret;
 
-	switch (reqtype) {
-	case HID_REQ_SET_REPORT:
-		if (buf[0] != reportnum) {
-			dev_err(dev, "report id mismatch.");
-			return -EINVAL;
-		}
+	int ret, copy_len;
 
-		ret = spi_hid_set_request(shid, &buf[1], len - 1,
-					  reportnum);
-		if (ret) {
-			dev_err(dev, "failed to set report.");
+	if (reqtype == HID_REQ_SET_REPORT && rtype == HID_FEATURE_REPORT) {
+		mutex_lock(&shid->lock);
+		ret = spi_hid_sync_request(shid, SPI_HID_OUT_SET_FEATURE,
+					   buf[0], buf + 1, len - 1);
+		mutex_unlock(&shid->lock);
+		if (ret)
 			return ret;
+		if (shid->resp_type == SPI_HID_REPORT_TYPE_RESET_RESP)
+			return len;
+		if (shid->resp_type != SPI_HID_REPORT_TYPE_SET_FEATURE_RESP) {
+			dev_err(dev, "SET_FEATURE got resp type %d\n",
+				shid->resp_type);
+			return -EIO;
 		}
-
-		ret = len;
-		break;
-	case HID_REQ_GET_REPORT:
-		ret = spi_hid_get_request(shid, reportnum);
-		if (ret) {
-			dev_err(dev, "failed to get report.");
-			return ret;
-		}
-
-		ret = min_t(size_t, len,
-			    (shid->response->body[1] | (shid->response->body[2] << 8)) + 1);
-		buf[0] = shid->response->body[3];
-		memcpy(&buf[1], &shid->response->content, ret);
-		break;
-	default:
-		dev_err(dev, "invalid request type.");
-		return -EIO;
+		return len;
 	}
 
-	return ret;
+	if (reqtype == HID_REQ_GET_REPORT && rtype == HID_FEATURE_REPORT) {
+		mutex_lock(&shid->lock);
+		ret = spi_hid_sync_request(shid, SPI_HID_OUT_GET_FEATURE,
+					   reportnum, NULL, 0);
+		mutex_unlock(&shid->lock);
+		if (ret) {
+			dev_err(dev, "GET_FEATURE 0x%02x failed: %d\n",
+				reportnum, ret);
+			return ret;
+		}
+
+		if (shid->resp_type == SPI_HID_REPORT_TYPE_RESET_RESP) {
+			memset(buf, 0, len);
+			buf[0] = reportnum;
+			return len;
+		}
+
+		if (shid->resp_type != SPI_HID_REPORT_TYPE_GET_FEATURE_RESP) {
+			dev_err(dev, "GET_FEATURE got resp type %d\n",
+				shid->resp_type);
+			return -EIO;
+		}
+
+		copy_len = shid->resp_len - SPI_HID_BODY_HEADER_LEN;
+		if (copy_len <= 0) {
+			dev_err(dev, "GET_FEATURE 0x%02x: empty response\n",
+				reportnum);
+			return -EIO;
+		}
+		if (copy_len > (int)len - 1)
+			copy_len = (int)len - 1;
+
+		buf[0] = reportnum;
+		memcpy(buf + 1, shid->resp_buf + SPI_HID_BODY_HEADER_LEN,
+		       copy_len);
+		return 1 + copy_len;
+	}
+
+	if (reqtype == HID_REQ_SET_REPORT) {
+		mutex_lock(&shid->lock);
+		ret = spi_hid_send_output(shid, SPI_HID_OUT_OUTPUT_REPORT,
+					  buf[0], buf + 1, len - 1);
+		mutex_unlock(&shid->lock);
+		return ret ? ret : len;
+	}
+
+	dev_err(dev, "Unsupported request: reqtype=%d rtype=%d\n",
+		reqtype, rtype);
+	return -EIO;
 }
 
-static int spi_hid_ll_output_report(struct hid_device *hid, __u8 *buf,
-				    size_t len)
+static int spi_hid_ll_output_report(struct hid_device *hid,
+				    __u8 *buf, size_t len)
 {
 	struct spi_device *spi = hid->driver_data;
 	struct spi_hid *shid = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	struct spi_hid_output_report report = {
-		.report_type = OUTPUT_REPORT,
-		.content_length = len - 1,
-		.content_id = buf[0],
-		.content = &buf[1],
-	};
-	int error;
+	int ret;
 
-	if (!test_bit(SPI_HID_READY, &shid->flags)) {
-		dev_err(dev, "%s called in unready state", __func__);
-		return -ENODEV;
+	mutex_lock(&shid->lock);
+	if (!shid->ready) {
+		dev_err(dev, "output_report called in unready state\n");
+		ret = -ENODEV;
+		goto out;
 	}
 
-	if (shid->desc.no_output_report_ack)
-		error = spi_hid_send_output_report(shid, &report);
-	else
-		error = spi_hid_sync_request(shid, &report);
+	ret = spi_hid_send_output(shid, SPI_HID_OUT_OUTPUT_REPORT,
+				  buf[0], &buf[1], len - 1);
+	if (ret == 0)
+		ret = len;
 
-	if (error) {
-		dev_err(dev, "failed to send output report.");
-		return error;
-	}
-
-	return len;
+out:
+	mutex_unlock(&shid->lock);
+	return ret;
 }
 
 static struct hid_ll_driver spi_hid_ll_driver = {
@@ -1206,6 +847,15 @@ static struct hid_ll_driver spi_hid_ll_driver = {
 	.raw_request = spi_hid_ll_raw_request,
 };
 
+static ssize_t ready_show(struct device *dev,
+			  struct device_attribute *attr, char *buf)
+{
+	struct spi_hid *shid = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%s\n", shid->ready ? "ready" : "not ready");
+}
+static DEVICE_ATTR_RO(ready);
+
 static ssize_t bus_error_count_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
@@ -1216,21 +866,9 @@ static ssize_t bus_error_count_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(bus_error_count);
 
-static ssize_t regulator_error_count_show(struct device *dev,
-					  struct device_attribute *attr,
-					  char *buf)
-{
-	struct spi_hid *shid = dev_get_drvdata(dev);
-
-	return sysfs_emit(buf, "%d (%d)\n",
-			  shid->regulator_error_count,
-			  shid->regulator_last_error);
-}
-static DEVICE_ATTR_RO(regulator_error_count);
-
 static ssize_t device_initiated_reset_count_show(struct device *dev,
-						 struct device_attribute *attr,
-						 char *buf)
+					struct device_attribute *attr,
+					char *buf)
 {
 	struct spi_hid *shid = dev_get_drvdata(dev);
 
@@ -1238,256 +876,204 @@ static ssize_t device_initiated_reset_count_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(device_initiated_reset_count);
 
-static struct attribute *spi_hid_attrs[] = {
+static const struct attribute *const spi_hid_attributes[] = {
+	&dev_attr_ready.attr,
 	&dev_attr_bus_error_count.attr,
-	&dev_attr_regulator_error_count.attr,
 	&dev_attr_device_initiated_reset_count.attr,
-	NULL	/* Terminator */
-};
-
-static const struct attribute_group spi_hid_group = {
-	.attrs = spi_hid_attrs,
-};
-
-const struct attribute_group *spi_hid_groups[] = {
-	&spi_hid_group,
 	NULL
 };
-EXPORT_SYMBOL_GPL(spi_hid_groups);
 
-/*
- * At the end of probe we initialize the device:
- *   0) assert reset, bias the interrupt line
- *   1) sleep minimal reset delay
- *   2) request IRQ
- *   3) power up the device
- *   4) deassert reset (high)
- * After this we expect an IRQ with a reset response.
- */
-static int spi_hid_dev_init(struct spi_hid *shid)
-{
-	struct spi_device *spi = shid->spi;
-	struct device *dev = &spi->dev;
-	int error;
-
-	shid->ops->custom_init(shid->ops);
-
-	shid->ops->assert_reset(shid->ops);
-
-	shid->ops->sleep_minimal_reset_delay(shid->ops);
-
-	error = devm_request_threaded_irq(dev, spi->irq, NULL, spi_hid_dev_irq,
-					  IRQF_ONESHOT, dev_name(&spi->dev), shid);
-	if (error) {
-		dev_err(dev, "%s: unable to request threaded IRQ.", __func__);
-		return error;
-	}
-	if (device_may_wakeup(dev)) {
-		error = dev_pm_set_wake_irq(dev, spi->irq);
-		if (error) {
-			dev_err(dev, "%s: failed to set wake IRQ.", __func__);
-			return error;
-		}
-	}
-
-	error = shid->ops->power_up(shid->ops);
-	if (error) {
-		dev_err(dev, "%s: could not power up.", __func__);
-		shid->regulator_error_count++;
-		shid->regulator_last_error = error;
-		return error;
-	}
-
-	shid->ops->deassert_reset(shid->ops);
-
-	return 0;
-}
-
-static void spi_hid_panel_follower_work(struct work_struct *work)
-{
-	struct spi_hid *shid = container_of(work, struct spi_hid,
-					    panel_follower_work);
-	int error;
-
-	if (!shid->desc.hid_version)
-		error = spi_hid_dev_init(shid);
-	else
-		error = spi_hid_resume(shid);
-	if (error)
-		dev_warn(&shid->spi->dev, "Power on failed: %d", error);
-	else
-		WRITE_ONCE(shid->panel_follower_work_finished, true);
-
-	/*
-	 * The work APIs provide a number of memory ordering guarantees
-	 * including one that says that memory writes before schedule_work()
-	 * are always visible to the work function, but they don't appear to
-	 * guarantee that a write that happened in the work is visible after
-	 * cancel_work_sync(). We'll add a write memory barrier here to match
-	 * with spi_hid_panel_unpreparing() to ensure that our write to
-	 * panel_follower_work_finished is visible there.
-	 */
-	smp_wmb();
-}
-
-static int spi_hid_panel_follower_resume(struct drm_panel_follower *follower)
-{
-	struct spi_hid *shid = container_of(follower, struct spi_hid, panel_follower);
-
-	/*
-	 * Powering on a touchscreen can be a slow process. Queue the work to
-	 * the system workqueue so we don't block the panel's power up.
-	 */
-	WRITE_ONCE(shid->panel_follower_work_finished, false);
-	schedule_work(&shid->panel_follower_work);
-
-	return 0;
-}
-
-static int spi_hid_panel_follower_suspend(struct drm_panel_follower *follower)
-{
-	struct spi_hid *shid = container_of(follower, struct spi_hid, panel_follower);
-
-	cancel_work_sync(&shid->panel_follower_work);
-
-	/* Match with shid_core_panel_follower_work() */
-	smp_rmb();
-	if (!READ_ONCE(shid->panel_follower_work_finished))
-		return 0;
-
-	return spi_hid_suspend(shid);
-}
-
-static const struct drm_panel_follower_funcs
-				spi_hid_panel_follower_prepare_funcs = {
-	.panel_prepared = spi_hid_panel_follower_resume,
-	.panel_unpreparing = spi_hid_panel_follower_suspend,
-};
-
-static int spi_hid_register_panel_follower(struct spi_hid *shid)
-{
-	struct device *dev = &shid->spi->dev;
-
-	shid->panel_follower.funcs = &spi_hid_panel_follower_prepare_funcs;
-
-	/*
-	 * If we're not in control of our own power up/power down then we can't
-	 * do the logic to manage wakeups. Give a warning if a user thought
-	 * that was possible then force the capability off.
-	 */
-	if (device_can_wakeup(dev)) {
-		dev_warn(dev, "Can't wakeup if following panel\n");
-		device_set_wakeup_capable(dev, false);
-	}
-
-	return drm_panel_add_follower(dev, &shid->panel_follower);
-}
-
-int spi_hid_core_probe(struct spi_device *spi, struct spihid_ops *ops,
-		       struct spi_hid_conf *conf)
+static int spi_hid_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
 	struct spi_hid *shid;
-	int error;
+	unsigned long irqflags;
+	int ret;
 
-	if (spi->irq <= 0)
-		return dev_err_probe(dev, spi->irq ?: -EINVAL, "Missing IRQ\n");
+	if (spi->irq <= 0) {
+		dev_err(dev, "Missing IRQ\n");
+		return spi->irq ?: -EINVAL;
+	}
 
 	shid = devm_kzalloc(dev, sizeof(*shid), GFP_KERNEL);
 	if (!shid)
 		return -ENOMEM;
 
 	shid->spi = spi;
-	shid->power_state = HIDSPI_ON;
-	shid->ops = ops;
-	shid->conf = conf;
-	set_bit(SPI_HID_RESET_PENDING, &shid->flags);
-	shid->is_panel_follower = drm_is_panel_follower(&spi->dev);
-
+	shid->power_state = SPI_HID_POWER_MODE_ACTIVE;
 	spi_set_drvdata(spi, shid);
 
-	/* Using now populated conf let's pre-calculate the read approvals */
-	spi_hid_populate_read_approvals(shid->conf, shid->read_approval_header,
-					shid->read_approval_body);
-
-	mutex_init(&shid->output_lock);
-	mutex_init(&shid->power_lock);
-	init_completion(&shid->output_done);
-
-	INIT_WORK(&shid->reset_work, spi_hid_reset_work);
-	INIT_WORK(&shid->panel_follower_work, spi_hid_panel_follower_work);
-
-	/*
-	 * We need to allocate the buffer without knowing the maximum
-	 * size of the reports. Let's use SZ_2K, then we do the
-	 * real computation later.
-	 */
-	error = spi_hid_alloc_buffers(shid, SZ_2K);
-	if (error)
-		return error;
-
-	if (shid->is_panel_follower) {
-		error = spi_hid_register_panel_follower(shid);
-		if (error) {
-			dev_err(dev, "%s: could not add panel follower.", __func__);
-			return error;
-		}
-	} else {
-		error = spi_hid_dev_init(shid);
-		if (error)
-			return error;
+	spi->mode = SPI_MODE_0 | SPI_TX_QUAD | SPI_RX_QUAD;
+	spi->max_speed_hz = 20000000;
+	spi->bits_per_word = 8;
+	ret = spi_setup(spi);
+	if (ret) {
+		dev_err(dev, "SPI setup failed: %d\n", ret);
+		return ret;
 	}
 
-	dev_dbg(dev, "%s: d3 -> %s.", __func__,
-		spi_hid_power_mode_string(shid->power_state));
+	shid->resp_buf = kzalloc(SPI_HID_MAX_INPUT_LEN, GFP_KERNEL);
+	shid->rd_buf = kzalloc(2048, GFP_KERNEL);
+	shid->irq_hdr_tx = kzalloc(SPI_HID_INPUT_HEADER_LEN, GFP_KERNEL);
+	shid->irq_hdr_rx = kzalloc(SPI_HID_INPUT_HEADER_LEN, GFP_KERNEL);
+	shid->irq_bdy_tx = kzalloc(SPI_HID_MAX_INPUT_LEN, GFP_KERNEL);
+	shid->irq_bdy_rx = kzalloc(SPI_HID_MAX_INPUT_LEN, GFP_KERNEL);
+	if (!shid->resp_buf || !shid->rd_buf ||
+	    !shid->irq_hdr_tx || !shid->irq_hdr_rx ||
+	    !shid->irq_bdy_tx || !shid->irq_bdy_rx) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+
+	qspi_fill_cmd(shid->irq_hdr_tx, SPI_HID_QSPI_READ_OPCODE,
+		       SPI_HID_INPUT_HDR_ADDR);
+	qspi_fill_cmd(shid->irq_bdy_tx, SPI_HID_QSPI_READ_OPCODE,
+		       SPI_HID_INPUT_BDY_ADDR);
+
+	shid->desc.max_input_length = SPI_HID_MAX_INPUT_LEN;
+
+	ret = sysfs_create_files(&dev->kobj, spi_hid_attributes);
+	if (ret) {
+		dev_err(dev, "sysfs_create_files failed\n");
+		goto err_free;
+	}
+
+	mutex_init(&shid->lock);
+	init_completion(&shid->output_done);
+	complete(&shid->output_done);
+
+	INIT_WORK(&shid->reset_work, spi_hid_reset_work);
+	INIT_WORK(&shid->create_device_work, spi_hid_create_device_work);
+	INIT_WORK(&shid->refresh_device_work, spi_hid_refresh_device_work);
+
+	shid->supply = devm_regulator_get_optional(dev, "vdd");
+	if (IS_ERR(shid->supply)) {
+		if (PTR_ERR(shid->supply) == -EPROBE_DEFER) {
+			ret = -EPROBE_DEFER;
+			goto err_sysfs;
+		}
+		shid->supply = NULL;
+	}
+
+	shid->pinctrl = devm_pinctrl_get(dev);
+	if (IS_ERR(shid->pinctrl)) {
+		dev_err(dev, "pinctrl_get failed: %ld\n",
+			PTR_ERR(shid->pinctrl));
+		ret = PTR_ERR(shid->pinctrl);
+		goto err_sysfs;
+	}
+
+	shid->pinctrl_reset = pinctrl_lookup_state(shid->pinctrl, "reset");
+	if (IS_ERR(shid->pinctrl_reset)) {
+		dev_err(dev, "pinctrl 'reset' not found: %ld\n",
+			PTR_ERR(shid->pinctrl_reset));
+		ret = PTR_ERR(shid->pinctrl_reset);
+		goto err_sysfs;
+	}
+
+	shid->pinctrl_active = pinctrl_lookup_state(shid->pinctrl, "active");
+	if (IS_ERR(shid->pinctrl_active)) {
+		dev_err(dev, "pinctrl 'active' not found: %ld\n",
+			PTR_ERR(shid->pinctrl_active));
+		ret = PTR_ERR(shid->pinctrl_active);
+		goto err_sysfs;
+	}
+
+	shid->pinctrl_sleep = pinctrl_lookup_state(shid->pinctrl, "sleep");
+	if (IS_ERR(shid->pinctrl_sleep))
+		shid->pinctrl_sleep = shid->pinctrl_reset;
+
+	irqflags = irq_get_trigger_type(spi->irq) | IRQF_ONESHOT;
+	ret = request_threaded_irq(spi->irq, NULL, spi_hid_irq_thread,
+				   irqflags, dev_name(&spi->dev), shid);
+	if (ret) {
+		dev_err(dev, "request_threaded_irq failed: %d\n", ret);
+		goto err_sysfs;
+	}
+	disable_irq(spi->irq);
+	shid->irq_enabled = false;
+
+	pm_runtime_enable(dev->parent);
+	ret = pm_runtime_get_sync(dev->parent);
+	if (ret < 0) {
+		dev_warn(dev, "SPI ctrl PM get failed: %d\n", ret);
+		pm_runtime_put_noidle(dev->parent);
+	}
+
+	/*
+	 * Bring-up: hold the device in reset (power off, reset asserted)
+	 * for a few ms, then deassert reset and enable the regulator. The
+	 * 2 s settle gives the touchpad firmware time to boot before we
+	 * arm the IRQ and start talking to it.
+	 */
+	pinctrl_select_state(shid->pinctrl, shid->pinctrl_reset);
+	msleep(SPI_HID_RESET_ASSERT_MS);
+	pinctrl_select_state(shid->pinctrl, shid->pinctrl_active);
+	spi_hid_power_up(shid);
+	msleep(2000);
+
+	pm_runtime_put(dev->parent);
+
+	enable_irq(spi->irq);
+	shid->irq_enabled = true;
 
 	return 0;
-}
-EXPORT_SYMBOL_GPL(spi_hid_core_probe);
 
-void spi_hid_core_remove(struct spi_device *spi)
+err_sysfs:
+	sysfs_remove_files(&dev->kobj, spi_hid_attributes);
+err_free:
+	kfree(shid->resp_buf);
+	kfree(shid->rd_buf);
+	kfree(shid->irq_hdr_tx);
+	kfree(shid->irq_hdr_rx);
+	kfree(shid->irq_bdy_tx);
+	kfree(shid->irq_bdy_rx);
+	return ret;
+}
+
+static void spi_hid_remove(struct spi_device *spi)
 {
 	struct spi_hid *shid = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	int error;
 
-	if (shid->is_panel_follower)
-		drm_panel_remove_follower(&shid->panel_follower);
-
+	spi_hid_power_down(shid);
+	free_irq(spi->irq, shid);
+	shid->irq_enabled = false;
+	sysfs_remove_files(&dev->kobj, spi_hid_attributes);
 	spi_hid_stop_hid(shid);
 
-	shid->ops->assert_reset(shid->ops);
-	error = shid->ops->power_down(shid->ops);
-	if (error)
-		dev_err(dev, "failed to disable regulator.");
-}
-EXPORT_SYMBOL_GPL(spi_hid_core_remove);
-
-static int spi_hid_core_pm_suspend(struct device *dev)
-{
-	struct spi_hid *shid = dev_get_drvdata(dev);
-
-	if (shid->is_panel_follower)
-		return 0;
-
-	return spi_hid_suspend(shid);
+	kfree(shid->resp_buf);
+	kfree(shid->rd_buf);
+	kfree(shid->irq_hdr_tx);
+	kfree(shid->irq_hdr_rx);
+	kfree(shid->irq_bdy_tx);
+	kfree(shid->irq_bdy_rx);
 }
 
-static int spi_hid_core_pm_resume(struct device *dev)
-{
-	struct spi_hid *shid = dev_get_drvdata(dev);
-
-	if (shid->is_panel_follower)
-		return 0;
-
-	return spi_hid_resume(shid);
-}
-
-const struct dev_pm_ops spi_hid_core_pm = {
-	SYSTEM_SLEEP_PM_OPS(spi_hid_core_pm_suspend, spi_hid_core_pm_resume)
+static const struct of_device_id spi_hid_of_match[] = {
+	{ .compatible = "hid-over-spi" },
+	{},
 };
-EXPORT_SYMBOL_GPL(spi_hid_core_pm);
+MODULE_DEVICE_TABLE(of, spi_hid_of_match);
 
-MODULE_DESCRIPTION("HID over SPI transport driver");
-MODULE_AUTHOR("Dmitry Antipov <dmanti@microsoft.com>");
+static const struct spi_device_id spi_hid_id_table[] = {
+	{ "hid-over-spi", 0 },
+	{ },
+};
+MODULE_DEVICE_TABLE(spi, spi_hid_id_table);
+
+static struct spi_driver spi_hid_driver = {
+	.driver = {
+		.name	= "spi_hid",
+		.owner	= THIS_MODULE,
+		.of_match_table = of_match_ptr(spi_hid_of_match),
+	},
+	.probe		= spi_hid_probe,
+	.remove		= spi_hid_remove,
+	.id_table	= spi_hid_id_table,
+};
+
+module_spi_driver(spi_hid_driver);
+
+MODULE_DESCRIPTION("HID over SPI (HIDSPI v3) QSPI transport driver");
 MODULE_LICENSE("GPL");
