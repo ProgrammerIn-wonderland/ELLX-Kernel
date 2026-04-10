@@ -1905,7 +1905,7 @@ CONFIG_CC_NO_ARRAY_BOUNDS                       policy<{'arm64': 'y'}>
 CONFIG_CC_NO_STRINGOP_OVERFLOW                  policy<{'arm64': 'y'}>
 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE              policy<{'arm64': 'y'}>
 CONFIG_CC_OPTIMIZE_FOR_SIZE                     policy<{'arm64': 'n'}>
-CONFIG_CC_VERSION_TEXT                          policy<{'arm64': '"aarch64-linux-gnu-gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0"'}>
+CONFIG_CC_VERSION_TEXT                          policy<{'arm64': '"gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0"'}>
 CONFIG_CDNS_I3C_MASTER                          policy<{'arm64': 'm'}>
 CONFIG_CDROM                                    policy<{'arm64': 'y'}>
 CONFIG_CDX_BUS                                  policy<{'arm64': 'y'}>
@@ -11470,6 +11470,9 @@ CONFIG_SPI_FSL_QUADSPI                          policy<{'arm64': 'm'}>
 CONFIG_SPI_FSL_SPI                              policy<{'arm64': 'y'}>
 CONFIG_SPI_GPIO                                 policy<{'arm64': 'm'}>
 CONFIG_SPI_HID                                  policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_ACPI                             policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_CORE                             policy<{'arm64': 'm'}>
+CONFIG_SPI_HID_OF                               policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_KUNPENG                         policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC                             policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC_V3XX                        policy<{'arm64': 'm'}>
@@ -11781,10 +11784,10 @@ CONFIG_SYSTEM_BLACKLIST_KEYRING                 policy<{'arm64': 'y'}>
 CONFIG_SYSTEM_DATA_VERIFICATION                 policy<{'arm64': 'y'}>
 CONFIG_SYSTEM_EXTRA_CERTIFICATE                 policy<{'arm64': 'y'}>
 CONFIG_SYSTEM_EXTRA_CERTIFICATE_SIZE            policy<{'arm64': '4096'}>
-CONFIG_SYSTEM_REVOCATION_KEYS                   policy<{'arm64': '"debian/canonical-revoked-certs.pem"'}>
+CONFIG_SYSTEM_REVOCATION_KEYS                   policy<{'arm64': '""'}>
 CONFIG_SYSTEM_REVOCATION_LIST                   policy<{'arm64': 'y'}>
 CONFIG_SYSTEM_TRUSTED_KEYRING                   policy<{'arm64': 'y'}>
-CONFIG_SYSTEM_TRUSTED_KEYS                      policy<{'arm64': '"debian/canonical-certs.pem"'}>
+CONFIG_SYSTEM_TRUSTED_KEYS                      policy<{'arm64': '""'}>
 CONFIG_SYSV68_PARTITION                         policy<{'arm64': 'y'}>
 CONFIG_SYSVIPC                                  policy<{'arm64': 'y'}>
 CONFIG_SYSVIPC_COMPAT                           policy<{'arm64': 'y'}>
