@@ -1,0 +1,76 @@
+name: Build qcom-x1e kernel packages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-qcom-x1e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build qcom-x1e Debian packages on arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show runner details
+        run: |
+          uname -a
+          lscpu
+          df -h
+
+      - name: Free disk space for the kernel package build
+        run: |
+          sudo rm -rf /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h
+
+      - name: Enable source repositories
+        run: |
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu-src.sources
+            sudo sed -i 's/^Types: deb$/Types: deb-src/' /etc/apt/sources.list.d/ubuntu-src.sources
+          elif [ -f /etc/apt/sources.list ]; then
+            sudo sed -Ei 's/^# (deb-src .*)/\1/' /etc/apt/sources.list
+          else
+            echo "Unable to find the Ubuntu APT sources configuration" >&2
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot
+          sudo apt-get build-dep -y .
+
+      - name: Prepare resolute qcom-x1e packaging metadata
+        run: |
+          export DEB_BUILD_OPTIONS="parallel=$(nproc)"
+          fakeroot ./debian/rules clean
+          ./debian/rules updateconfigs
+
+      - name: Build resolute qcom-x1e kernel packages
+        run: |
+          export DEB_BUILD_OPTIONS="parallel=$(nproc)"
+          fakeroot ./debian/rules binary-qcom-x1e
+
+      - name: Upload qcom-x1e packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcom-x1e-kernel-packages-arm64
+          if-no-files-found: error
+          path: |
+            ../*.deb
+            ../*.changes
+            ../*.buildinfo
