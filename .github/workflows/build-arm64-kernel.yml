@@ -45,7 +45,7 @@ jobs:
             bc \
             bindgen \
             bison \
-            bpftool \
+            linux-tools-common \
             clang-19 \
             cpio \
             curl \
@@ -71,7 +71,7 @@ jobs:
             libnuma-dev \
             libpci-dev \
             libssl-dev \
-            libstdc++-dev \
+            libstdc++-13-dev \
             libtool \
             libtraceevent-dev \
             libtracefs-dev \
