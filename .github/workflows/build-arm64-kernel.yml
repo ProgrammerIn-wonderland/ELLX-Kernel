@@ -88,7 +88,6 @@ jobs:
             rust-src \
             rustc \
             rustfmt \
-            stubble \
             systemd-ukify \
             uuid-dev \
             zstd
