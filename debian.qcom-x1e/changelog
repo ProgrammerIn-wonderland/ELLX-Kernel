@@ -1,3 +1,9 @@
+linux-qcom-x1e (7.0.0-14.16) resolute; urgency=medium
+
+  * Working touchpad
+
+ -- alice <alice@alice-Microsoft-Surface-Laptop-7th-Edition>  Mon, 20 Apr 2026 20:48:57 -0400
+
 linux-qcom-x1e (7.0.0-14.15) resolute; urgency=medium
 
   * Aoi 
