@@ -1520,7 +1520,7 @@ CONFIG_BD79703                                  policy<{'arm64': 'm'}>
 CONFIG_BD957XMUF_WATCHDOG                       policy<{'arm64': 'm'}>
 CONFIG_BD96801_WATCHDOG                         policy<{'arm64': 'm'}>
 CONFIG_BE2ISCSI                                 policy<{'arm64': 'm'}>
-CONFIG_BE2NET                                   policy<{'arm64': 'm'}>
+CONFIG_BE2NET                                   policy<{'arm64': 'y'}>
 CONFIG_BE2NET_BE2                               policy<{'arm64': 'y'}>
 CONFIG_BE2NET_BE3                               policy<{'arm64': 'y'}>
 CONFIG_BE2NET_HWMON                             policy<{'arm64': 'y'}>
@@ -3283,6 +3283,7 @@ CONFIG_DRM_MSM_KMS_FBDEV                        policy<{'arm64': 'y'}>
 CONFIG_DRM_MSM_MDP4                             policy<{'arm64': 'y'}>
 CONFIG_DRM_MSM_MDP5                             policy<{'arm64': 'y'}>
 CONFIG_DRM_MSM_MDSS                             policy<{'arm64': 'y'}>
+CONFIG_DRM_MSM_VALIDATE_XML                     policy<{'arm64': 'n'}>
 CONFIG_DRM_MXS                                  policy<{'arm64': 'y'}>
 CONFIG_DRM_MXSFB                                policy<{'arm64': 'm'}>
 CONFIG_DRM_NOUVEAU                              policy<{'arm64': 'm'}>
@@ -9741,11 +9742,14 @@ CONFIG_RT_GROUP_SCHED                           policy<{'arm64': 'n'}>
 CONFIG_RT_MUTEXES                               policy<{'arm64': 'y'}>
 CONFIG_RUNTIME_TESTING_MENU                     policy<{'arm64': 'y'}>
 CONFIG_RUSTC_HAS_COERCE_POINTEE                 policy<{'arm64': 'y'}>
+CONFIG_RUSTC_HAS_FILE_AS_C_STR                  policy<{'arm64': 'y'}>
+CONFIG_RUSTC_HAS_FILE_WITH_NUL                  policy<{'arm64': 'y'}>
 CONFIG_RUSTC_HAS_SLICE_AS_FLATTENED             policy<{'arm64': 'y'}>
-CONFIG_RUSTC_LLVM_VERSION                       policy<{'arm64': '190107'}>
+CONFIG_RUSTC_HAS_SPAN_FILE                      policy<{'arm64': 'y'}>
+CONFIG_RUSTC_HAS_UNNECESSARY_TRANSMUTES         policy<{'arm64': 'y'}>
+CONFIG_RUSTC_LLVM_VERSION                       policy<{'arm64': '220102'}>
 CONFIG_RUSTC_SUPPORTS_ARM64                     policy<{'arm64': 'y'}>
-CONFIG_RUSTC_VERSION                            policy<{'arm64': '108501'}>
-CONFIG_RUST_IS_AVAILABLE                        policy<{'arm64': 'y'}>
+CONFIG_RUSTC_VERSION                            policy<{'arm64': '109500'}>
 CONFIG_RV                                       policy<{'arm64': 'y'}>
 CONFIG_RVU_ESWITCH                              policy<{'arm64': 'm'}>
 CONFIG_RV_MON_EVENTS                            policy<{'arm64': 'y'}>
@@ -11470,10 +11474,7 @@ CONFIG_SPI_FSL_LPSPI                            policy<{'arm64': 'm'}>
 CONFIG_SPI_FSL_QUADSPI                          policy<{'arm64': 'm'}>
 CONFIG_SPI_FSL_SPI                              policy<{'arm64': 'y'}>
 CONFIG_SPI_GPIO                                 policy<{'arm64': 'm'}>
-CONFIG_SPI_HID                                  policy<{'arm64': 'm'}>
-CONFIG_SPI_HID_ACPI                             policy<{'arm64': 'm'}>
-CONFIG_SPI_HID_CORE                             policy<{'arm64': 'm'}>
-CONFIG_SPI_HID_OF                               policy<{'arm64': 'm'}>
+CONFIG_SPI_HID                                  policy<{'arm64': 'n'}>
 CONFIG_SPI_HISI_KUNPENG                         policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC                             policy<{'arm64': 'm'}>
 CONFIG_SPI_HISI_SFC_V3XX                        policy<{'arm64': 'm'}>
@@ -13046,7 +13047,7 @@ CONFIG_VIDEO_MEDIATEK_VPU                       policy<{'arm64': 'm'}>
 CONFIG_VIDEO_MEM2MEM_DEINTERLACE                policy<{'arm64': 'm'}>
 CONFIG_VIDEO_MESON_GE2D                         policy<{'arm64': 'm'}>
 CONFIG_VIDEO_MESON_VDEC                         policy<{'arm64': 'm'}>
-CONFIG_VIDEO_MGB4                               policy<{'arm64': 'm'}>
+CONFIG_VIDEO_MGB4                               policy<{'arm64': 'n'}>
 CONFIG_VIDEO_ML86V7667                          policy<{'arm64': 'm'}>
 CONFIG_VIDEO_MSP3400                            policy<{'arm64': 'm'}>
 CONFIG_VIDEO_MT9M001                            policy<{'arm64': 'm'}>
